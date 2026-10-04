@@ -36,6 +36,10 @@ def init_engine(url: str | None = None) -> None:
 
     Base.metadata.create_all(engine)
 
+    from . import migrate
+
+    migrate.run(engine)
+
 
 def get_db() -> Iterator[Session]:
     assert SessionLocal is not None, "数据库未初始化"

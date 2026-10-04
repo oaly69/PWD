@@ -24,6 +24,8 @@ class ProviderIn(BaseModel):
     enabled: bool = True
     chat_models: list[str] = []
     image_models: list[str] = []
+    video_models: list[str] = []
+    tts_models: list[str] = []
     extra: dict[str, Any] = {}
 
 
@@ -47,12 +49,17 @@ def apply_provider(provider: Provider, body: ProviderIn) -> None:
     provider.enabled = body.enabled
     provider.chat_models = _clean_models(body.chat_models) if body.kind == "openai" else []
     provider.image_models = _clean_models(body.image_models)
+    provider.video_models = _clean_models(body.video_models)
+    provider.tts_models = _clean_models(body.tts_models) if body.kind == "openai" else []
     provider.extra = body.extra or {}
     if body.kind == "comfyui":
         workflows = provider.extra.get("workflows") or {}
         if not isinstance(workflows, dict):
             raise HTTPException(status_code=422, detail="workflows 必须是 {名称: 工作流 JSON} 的对象")
-        provider.image_models = list(workflows.keys())
+        # extra.workflow_kinds 标记每个工作流用于图像还是视频，默认图像
+        kinds = provider.extra.get("workflow_kinds") or {}
+        provider.image_models = [n for n in workflows if kinds.get(n, "image") == "image"]
+        provider.video_models = [n for n in workflows if kinds.get(n) == "video"]
 
 
 def provider_out(p: Provider) -> dict[str, Any]:
@@ -66,6 +73,8 @@ def provider_out(p: Provider) -> dict[str, Any]:
         "enabled": p.enabled,
         "chat_models": p.chat_models or [],
         "image_models": p.image_models or [],
+        "video_models": p.video_models or [],
+        "tts_models": p.tts_models or [],
         "extra": p.extra or {},
     }
 
@@ -76,11 +85,37 @@ async def test_provider_connection(provider: Provider) -> dict[str, Any]:
             stats = await comfyui.check(provider)
             return {"ok": True, "message": "ComfyUI 连接成功", "detail": stats.get("system", {})}
         models = await openai_compat.list_models(provider)
-        return {"ok": True, "message": f"连接成功，发现 {len(models)} 个模型", "models": models}
+        return {"ok": True, "message": f"连接成功，发现 {len(models)} 个模型", "models": models, "classified": classify_models(models)}
     except ProviderError as exc:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:  # noqa: BLE001 - 网络错误等
         return {"ok": False, "message": f"连接失败：{exc.__class__.__name__}: {exc}"}
+
+
+_IMAGE_HINTS = ("image", "dall-e", "flux", "kolors", "stable-diffusion", "sdxl", "sd3", "imagen", "midjourney",
+                "seedream", "cogview", "hidream", "recraft", "ideogram", "qwen-image", "janus", "wanx")
+_VIDEO_HINTS = ("video", "sora", "veo", "kling", "wan2", "wan-", "hunyuanvideo", "seedance", "hailuo", "cogvideo",
+                "runway", "pika", "vidu", "ltx")
+_TTS_HINTS = ("tts", "speech", "cosyvoice", "fish-speech", "fishaudio", "indextts", "moss-tts", "voice")
+_SKIP_HINTS = ("embed", "rerank", "whisper", "asr", "moderation", "sensevoice", "bge-", "transcribe")
+
+
+def classify_models(models: list[str]) -> dict[str, list[str]]:
+    """按名称特征把模型粗略归类为 文本 / 图像 / 视频 / 语音，供前端一键勾选。"""
+    out: dict[str, list[str]] = {"chat": [], "image": [], "video": [], "tts": [], "other": []}
+    for m in models:
+        low = m.lower()
+        if any(h in low for h in _SKIP_HINTS):
+            out["other"].append(m)
+        elif any(h in low for h in _VIDEO_HINTS):
+            out["video"].append(m)
+        elif any(h in low for h in _TTS_HINTS):
+            out["tts"].append(m)
+        elif any(h in low for h in _IMAGE_HINTS) and "vl" not in low.split("-") and "vision" not in low:
+            out["image"].append(m)
+        else:
+            out["chat"].append(m)
+    return out
 
 
 def _get(db: Session, provider_id: int) -> Provider:
@@ -98,6 +133,21 @@ def list_providers(db: Session = Depends(get_db)):
 @router.get("/comfyui/example")
 def comfyui_example():
     return {"workflows": {"SDXL 文生图": comfyui.EXAMPLE_WORKFLOW}}
+
+
+class DraftTestIn(ProviderIn):
+    id: int | None = None  # 编辑已有服务且未填写新 Key 时，沿用已保存的 Key
+
+
+@router.post("/test-draft")
+async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
+    """测试尚未保存的配置（用于表单中的“测试连接 / 获取模型”）。"""
+    tmp = Provider()
+    if body.id and body.api_key is None:
+        saved = db.get(Provider, body.id)
+        tmp.api_key = saved.api_key if saved else ""
+    apply_provider(tmp, body)
+    return await test_provider_connection(tmp)
 
 
 @router.post("")
@@ -135,7 +185,8 @@ async def remote_models(provider_id: int, db: Session = Depends(get_db)):
     if p.kind != "openai":
         raise HTTPException(status_code=400, detail="仅 OpenAI 兼容服务支持拉取模型列表")
     try:
-        return {"models": await openai_compat.list_models(p)}
+        models = await openai_compat.list_models(p)
+        return {"models": models, "classified": classify_models(models)}
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

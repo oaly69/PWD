@@ -11,6 +11,7 @@ from ..config import VERSION, settings
 from ..db import get_db
 from ..models import Provider, User
 from ..security import create_session_token, hash_password
+from ..seed import seed_defaults
 from ..site import is_installed, set_setting
 from .auth import set_session_cookie
 from .providers import ProviderIn, apply_provider, test_provider_connection
@@ -76,10 +77,12 @@ def do_install(body: InstallIn, response: Response, db: Session = Depends(get_db
             if provider.chat_models:
                 set_setting(db, "default_chat_provider_id", provider.id)
                 set_setting(db, "default_chat_model", provider.chat_models[0])
-            if provider.image_models:
-                set_setting(db, "default_image_provider_id", provider.id)
-                set_setting(db, "default_image_model", provider.image_models[0])
+            for kind, models in (("image", provider.image_models), ("video", provider.video_models), ("tts", provider.tts_models)):
+                if models:
+                    set_setting(db, f"default_{kind}_provider_id", provider.id)
+                    set_setting(db, f"default_{kind}_model", models[0])
 
+        seed_defaults(db)
         set_setting(db, "installed", True)
         db.commit()
 

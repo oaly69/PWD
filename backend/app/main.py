@@ -9,7 +9,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .config import VERSION, settings
-from .routers import assets, auth, chat, images, install, prompts, providers, system
+from .routers import assets, auth, chat, generate, install, prompts, providers, system
+from .seed import seed_if_upgraded
 from .services import tasks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -21,6 +22,8 @@ async def lifespan(_app: FastAPI):
     if db.engine is None:
         db.init_engine()
     tasks.recover_interrupted()
+    with db.new_session() as session:
+        seed_if_upgraded(session)
     log.info("PWD %s 已启动，数据目录：%s", VERSION, settings.data_dir)
     if settings.install_token:
         log.info("已启用安装令牌保护（PWD_INSTALL_TOKEN）")
@@ -30,7 +33,7 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="PWD - 个人 AIGC 创作平台", version=VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
-    for r in (system.router, install.router, auth.router, providers.router, chat.router, images.router, assets.router, prompts.router):
+    for r in (system.router, install.router, auth.router, providers.router, chat.router, generate.router, assets.router, prompts.router):
         app.include_router(r)
 
     static_dir = settings.static_dir

@@ -1,20 +1,28 @@
-import { reactive } from 'vue'
+import { store } from './store'
 import router from './router'
 
-export const state = reactive({
-  site: { site_name: 'PWD 创作台', installed: true, version: '' },
-  user: null,
-  toasts: [],
-})
+// 由 App.vue 注入 naive-ui 的 message / dialog 实例
+export const ui = { message: null, dialog: null, notification: null }
 
-let toastId = 0
-export function toast(message, type = 'info', timeout = 3500) {
-  const id = ++toastId
-  state.toasts.push({ id, message, type })
-  setTimeout(() => {
-    const i = state.toasts.findIndex((t) => t.id === id)
-    if (i >= 0) state.toasts.splice(i, 1)
-  }, timeout)
+export function toast(content, type = 'info', duration = 3000) {
+  if (ui.message) ui.message[type === 'error' ? 'error' : type](content, { duration, keepAliveOnHover: true })
+  else console[type === 'error' ? 'error' : 'log'](content)
+}
+
+export function confirmDialog({ title = '确认操作', content, positiveText = '确定', type = 'warning' }) {
+  return new Promise((resolve) => {
+    if (!ui.dialog) return resolve(window.confirm(content))
+    ui.dialog[type]({
+      title,
+      content,
+      positiveText,
+      negativeText: '取消',
+      onPositiveClick: () => resolve(true),
+      onNegativeClick: () => resolve(false),
+      onClose: () => resolve(false),
+      onMaskClick: () => resolve(false),
+    })
+  })
 }
 
 export class ApiError extends Error {
@@ -41,7 +49,14 @@ export async function request(method, url, body, { raw = false, silent = false, 
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
-  const resp = await fetch(url, opts)
+  let resp
+  try {
+    resp = await fetch(url, opts)
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    if (!silent) toast('网络连接失败，请检查服务是否在运行', 'error')
+    throw e
+  }
   if (raw && resp.ok) return resp
   let data = null
   try {
@@ -51,14 +66,14 @@ export async function request(method, url, body, { raw = false, silent = false, 
   }
   if (!resp.ok) {
     const err = new ApiError(resp.status, errorMessage(data, resp.status))
-    if (resp.status === 409 && url !== '/api/install') {
-      state.site.installed = false
+    if (resp.status === 409 && !url.startsWith('/api/install')) {
+      store.site.installed = false
       router.replace('/install')
     } else if (resp.status === 401 && !url.startsWith('/api/auth/')) {
-      state.user = null
+      store.user = null
       router.replace({ path: '/login', query: { next: router.currentRoute.value.fullPath } })
     } else if (!silent) {
-      toast(err.message, 'error')
+      toast(err.message, 'error', 5000)
     }
     throw err
   }
@@ -100,14 +115,14 @@ export async function streamPost(url, body, onEvent, signal) {
   }
 }
 
-export async function loadSite() {
-  state.site = await api.get('/api/site')
-  document.title = state.site.site_name
-  return state.site
+export async function uploadFile(file) {
+  const fd = new FormData()
+  fd.append('file', file)
+  return api.post('/api/assets/upload', fd)
 }
 
-export function formatTime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleString('zh-CN', { hour12: false })
+export async function loadSite() {
+  store.site = await api.get('/api/site')
+  document.title = store.site.site_name
+  return store.site
 }
