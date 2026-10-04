@@ -14,6 +14,12 @@ DEFAULTS: dict[str, Any] = {
     "default_chat_model": "",
     "default_image_provider_id": None,
     "default_image_model": "",
+    "default_video_provider_id": None,
+    "default_video_model": "",
+    "default_tts_provider_id": None,
+    "default_tts_model": "",
+    "enhance_provider_id": None,
+    "enhance_model": "",
     "default_system_prompt": "",
 }
 

@@ -52,6 +52,8 @@ class Provider(Base):
     # 文本模型与图像模型列表（用户可手动维护，也可从 /models 拉取）
     chat_models: Mapped[list] = mapped_column(JSON, default=list)
     image_models: Mapped[list] = mapped_column(JSON, default=list)
+    video_models: Mapped[list] = mapped_column(JSON, default=list)
+    tts_models: Mapped[list] = mapped_column(JSON, default=list)
     # 额外配置：ComfyUI 工作流、额外请求头等
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -65,6 +67,10 @@ class Conversation(Base):
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     model: Mapped[str] = mapped_column(String(255), default="")
     system_prompt: Mapped[str] = mapped_column(Text, default="")
+    icon: Mapped[str] = mapped_column(String(16), default="")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 模型参数：temperature / top_p / max_tokens / context_count
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -80,24 +86,29 @@ class Message(Base):
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text, default="")
+    reasoning: Mapped[str] = mapped_column(Text, default="")  # 推理模型的思考过程
+    attachments: Mapped[list] = mapped_column(JSON, default=list)  # 附件作品 ID 列表
+    model: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
 class Task(Base):
-    """异步生成任务（图像生成等），后台执行，前端轮询状态。"""
+    """异步生成任务（图像 / 视频 / 语音），后台执行，前端轮询状态。"""
 
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    kind: Mapped[str] = mapped_column(String(32), default="image")
-    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/succeeded/failed
+    kind: Mapped[str] = mapped_column(String(32), default="image")  # image / video / tts
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/succeeded/failed/cancelled
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     model: Mapped[str] = mapped_column(String(255), default="")
     prompt: Mapped[str] = mapped_column(Text, default="")
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str] = mapped_column(Text, default="")
+    external_id: Mapped[str] = mapped_column(String(255), default="")  # 远端异步任务 ID
+    progress: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -115,6 +126,8 @@ class Asset(Base):
     filename: Mapped[str] = mapped_column(String(255))
     mime: Mapped[str] = mapped_column(String(64), default="image/png")
     size: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
     prompt: Mapped[str] = mapped_column(Text, default="")
     model: Mapped[str] = mapped_column(String(255), default="")
     favorite: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -129,7 +142,8 @@ class PromptTemplate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255))
-    category: Mapped[str] = mapped_column(String(32), default="image")  # image / chat
+    category: Mapped[str] = mapped_column(String(32), default="image")  # image / chat（对话角色）
+    icon: Mapped[str] = mapped_column(String(16), default="")
     content: Mapped[str] = mapped_column(Text, default="")
     negative: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

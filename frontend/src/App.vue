@@ -1,10 +1,34 @@
 <template>
-  <router-view />
-  <div class="toasts">
-    <div v-for="t in state.toasts" :key="t.id" class="toast" :class="t.type">{{ t.message }}</div>
-  </div>
+  <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="zhCN" :date-locale="dateZhCN">
+    <n-global-style />
+    <n-loading-bar-provider>
+      <n-message-provider placement="top">
+        <n-notification-provider placement="bottom-right">
+          <n-dialog-provider>
+            <UiBridge />
+            <router-view />
+          </n-dialog-provider>
+        </n-notification-provider>
+      </n-message-provider>
+    </n-loading-bar-provider>
+  </n-config-provider>
 </template>
 
 <script setup>
-import { state } from './api'
+import { defineComponent } from 'vue'
+import {
+  NConfigProvider, NDialogProvider, NGlobalStyle, NLoadingBarProvider, NMessageProvider, NNotificationProvider,
+  dateZhCN, useDialog, useMessage, useNotification, zhCN,
+} from 'naive-ui'
+import { naiveTheme, themeOverrides } from './composables/theme'
+import { ui } from './api'
+
+const UiBridge = defineComponent({
+  setup() {
+    ui.message = useMessage()
+    ui.dialog = useDialog()
+    ui.notification = useNotification()
+    return () => null
+  },
+})
 </script>

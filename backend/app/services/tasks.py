@@ -3,46 +3,33 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import mimetypes
-import uuid
-from datetime import datetime
 
-from ..config import settings
 from ..db import new_session
 from ..models import Asset, Provider, Task, utcnow
 from . import comfyui, openai_compat
+from .media import image_size, read_media, save_media
+from .openai_compat import ProviderError
 
 log = logging.getLogger("pwd.tasks")
 
-MAX_CONCURRENCY = 2
-_semaphore: asyncio.Semaphore | None = None
-_running: set[asyncio.Task] = set()
+# 不同类型任务各自的并发上限：视频任务耗时长，不应阻塞图像任务
+CONCURRENCY = {"image": 3, "video": 2, "tts": 3}
+_semaphores: dict[str, asyncio.Semaphore] = {}
+_running: dict[int, asyncio.Task] = {}
+
+ACTIVE = ("pending", "running")
 
 
-def _sem() -> asyncio.Semaphore:
-    global _semaphore
-    if _semaphore is None:
-        _semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    return _semaphore
-
-
-def save_media(data: bytes, mime: str) -> str:
-    """保存文件到 media 目录，返回相对文件名（按月份分目录）。"""
-    ext = mimetypes.guess_extension(mime) or ".bin"
-    if ext == ".jpe":
-        ext = ".jpg"
-    sub = datetime.now().strftime("%Y%m")
-    folder = settings.media_dir / sub
-    folder.mkdir(parents=True, exist_ok=True)
-    name = f"{uuid.uuid4().hex}{ext}"
-    (folder / name).write_bytes(data)
-    return f"{sub}/{name}"
+def _sem(kind: str) -> asyncio.Semaphore:
+    if kind not in _semaphores:
+        _semaphores[kind] = asyncio.Semaphore(CONCURRENCY.get(kind, 2))
+    return _semaphores[kind]
 
 
 def recover_interrupted() -> None:
     """服务重启时，把仍处于运行状态的任务标记为失败。"""
     with new_session() as db:
-        for task in db.query(Task).filter(Task.status.in_(["pending", "running"])).all():
+        for task in db.query(Task).filter(Task.status.in_(ACTIVE)).all():
             task.status = "failed"
             task.error = "服务重启，任务被中断"
             task.finished_at = utcnow()
@@ -51,36 +38,99 @@ def recover_interrupted() -> None:
 
 def submit(task_id: int) -> None:
     t = asyncio.get_running_loop().create_task(_run(task_id))
-    _running.add(t)
-    t.add_done_callback(_running.discard)
+    _running[task_id] = t
+    t.add_done_callback(lambda _t: _running.pop(task_id, None))
+
+
+def cancel(task_id: int) -> bool:
+    t = _running.get(task_id)
+    if t is None:
+        return False
+    t.cancel()
+    return True
+
+
+def _load_references(db, ids: list[int] | None) -> list[tuple[bytes, str]]:
+    refs: list[tuple[bytes, str]] = []
+    for aid in ids or []:
+        asset = db.get(Asset, int(aid))
+        if asset is None:
+            raise ProviderError(f"参考素材 #{aid} 不存在")
+        refs.append((read_media(asset.filename), asset.mime))
+    return refs
+
+
+def effective_prompt(task: Task) -> tuple[str, dict]:
+    """把风格预设合并进提示词与反向提示词（任务记录中保留用户原始输入）。"""
+    params = dict(task.params or {})
+    prompt = task.prompt
+    if params.get("style_prompt"):
+        prompt = f"{prompt.rstrip('，,。. ')}，{params['style_prompt']}"
+    if params.get("style_negative"):
+        neg = params.get("negative_prompt", "").strip()
+        params["negative_prompt"] = f"{neg}, {params['style_negative']}" if neg else params["style_negative"]
+    return prompt, params
+
+
+async def _execute(db, task: Task, provider: Provider) -> list[tuple[bytes, str]]:
+    prompt, params = effective_prompt(task)
+    refs = _load_references(db, params.get("reference_asset_ids"))
+
+    async def on_progress(progress: int, external_id: str = "") -> None:
+        changed = False
+        if progress != task.progress:
+            task.progress = progress
+            changed = True
+        if external_id and external_id != task.external_id:
+            task.external_id = external_id
+            changed = True
+        if changed:
+            db.commit()
+
+    if provider.kind == "comfyui":
+        if task.kind == "tts":
+            raise ProviderError("ComfyUI 暂不支持语音合成")
+        return await comfyui.generate(provider, task.model, prompt, params, refs, on_progress)
+    if task.kind == "image":
+        return await openai_compat.generate_images(provider, task.model, prompt, params, refs)
+    if task.kind == "video":
+        return await openai_compat.generate_video(
+            provider, task.model, prompt, params, refs[0] if refs else None, on_progress
+        )
+    if task.kind == "tts":
+        return [await openai_compat.speech(provider, task.model, task.prompt, params)]
+    raise ProviderError(f"未知任务类型：{task.kind}")
 
 
 async def _run(task_id: int) -> None:
-    async with _sem():
-        with new_session() as db:
-            task = db.get(Task, task_id)
-            if task is None:
-                return
-            provider = db.get(Provider, task.provider_id) if task.provider_id else None
-            task.status = "running"
-            db.commit()
-            try:
+    with new_session() as db:
+        task = db.get(Task, task_id)
+        if task is None:
+            return
+        try:
+            async with _sem(task.kind):
+                provider = db.get(Provider, task.provider_id) if task.provider_id else None
+                task.status = "running"
+                db.commit()
                 if provider is None:
-                    raise openai_compat.ProviderError("模型服务不存在或已被删除")
-                if provider.kind == "comfyui":
-                    images = await comfyui.generate_images(provider, task.model, task.prompt, task.params or {})
-                else:
-                    images = await openai_compat.generate_images(provider, task.model, task.prompt, task.params or {})
-                for data, mime in images:
+                    raise ProviderError("模型服务不存在或已被删除")
+                outputs = await _execute(db, task, provider)
+                for data, mime in outputs:
                     filename = save_media(data, mime)
+                    kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else task.kind
+                    w, h = image_size(data) if kind == "image" else (0, 0)
                     db.add(Asset(
-                        kind="image", source="generated", filename=filename, mime=mime, size=len(data),
-                        prompt=task.prompt, model=task.model, task_id=task.id,
+                        kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
+                        width=w, height=h, prompt=task.prompt, model=task.model, task_id=task.id,
                     ))
                 task.status = "succeeded"
-            except Exception as exc:  # noqa: BLE001 - 任何错误都记录到任务上
-                log.warning("task %s failed: %s", task_id, exc)
-                task.status = "failed"
-                task.error = str(exc) or exc.__class__.__name__
-            task.finished_at = utcnow()
-            db.commit()
+                task.progress = 100
+        except asyncio.CancelledError:
+            task.status = "cancelled"
+            task.error = "已取消"
+        except Exception as exc:  # noqa: BLE001 - 任何错误都记录到任务上
+            log.warning("task %s failed: %s", task_id, exc)
+            task.status = "failed"
+            task.error = str(exc) or exc.__class__.__name__
+        task.finished_at = utcnow()
+        db.commit()

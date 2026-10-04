@@ -1,20 +1,35 @@
 # PWD · 个人 AIGC 创作平台
 
-一个可自托管的个人 AIGC 创作工作台：对话写作、文生图、作品管理、提示词沉淀，统一在一个 Web 界面中完成。
-**Docker 一键部署，零必填环境变量**，启动后在浏览器的安装向导中完成全部配置。
+可自托管的个人 AIGC 创作工作室：**对话写作、图像生成、视频生成、语音合成**，作品与提示词统一沉淀在一个地方。
+**Docker / Podman 一键部署，零必填环境变量**，启动后在浏览器的安装向导中完成全部配置，数据完全保存在你自己的服务器上。
+
+![工作台](docs/screenshots/dashboard.webp)
 
 ## 功能
 
-| 模块 | 说明 |
+### 创作
+
+| 模块 | 能力 |
 |---|---|
-| 🧙 安装向导 | 首次访问自动进入：设置站点名称、管理员账号，可选配置第一个模型服务并测试连接 |
-| 🔌 模型服务 | 任意 **OpenAI 兼容接口**（OpenAI / DeepSeek / 硅基流动 / OpenRouter / Ollama / One API / New API …）与 **ComfyUI**；支持测试连接、一键拉取模型列表 |
-| 💬 对话创作 | 多会话、流式输出、Markdown 渲染、角色设定（系统提示词）、重新生成、中途停止 |
-| 🎨 图像生成 | 文生图；尺寸预设、数量、种子、反向提示词、自定义额外请求参数；后台异步任务，可复用参数 |
-| 🧩 ComfyUI | 导入「API 格式」工作流，使用 `{{prompt}}` `{{seed}}` `{{width}}` 等占位符，工作流名称即模型名称 |
-| 🖼️ 作品库 | 生成结果自动入库；收藏、搜索、筛选、大图预览、下载、再次生成；支持上传图片/视频/音频素材 |
-| 📝 提示词库 | 图像提示词与对话角色模板，可在生成页 / 对话页直接调用 |
-| ⚙️ 系统设置 | 站点名称、默认模型、默认系统提示词、修改密码 |
+| 💬 **对话** | 多会话、流式输出、Markdown 与代码高亮；**识图**（粘贴 / 拖拽图片给视觉模型）；**推理过程**展示（DeepSeek-R1 等 `reasoning_content` 与 `<think>`）；编辑消息后重新生成、中途停止、重新生成；会话**置顶 / 搜索 / 按日期分组 / AI 命名 / 导出 Markdown**；每个对话独立的角色设定与模型参数（温度、Top P、最大长度、上下文条数） |
+| 🎨 **图像** | 文生图、**图生图 / 图像编辑**（上传、粘贴、拖拽或从作品库选参考图）；**12 种风格预设**；**AI 优化提示词**；可视化画幅比例、批量生成、种子、反向提示词、额外请求参数；结果一键「作为参考图」继续迭代 |
+| 🎬 **视频** | 文生视频、**首帧图生视频**；支持 OpenAI Sora 风格（`/videos`）与硅基流动（`/video/submit`）两种异步接口及 ComfyUI 视频工作流；进度显示，可离开页面，完成后通知 |
+| 🔊 **语音** | OpenAI 兼容 `/audio/speech`：多音色（含硅基流动 CosyVoice）、语速、输出格式、语气指令 |
+
+### 管理
+
+| 模块 | 能力 |
+|---|---|
+| 🖼️ **作品库** | 按真实比例排布的瀑布流、无限滚动；按类型 / 来源 / 模型 / 收藏筛选与搜索；**多选批量收藏、打包下载、删除**；大图查看器展示完整生成参数，可「复用参数」「作为参考图」「生成视频」；拖拽上传素材；自动生成缩略图 |
+| 📝 **提示词与角色** | 对话角色（带图标的系统提示词）与图像提示词模板，内置常用示例；创作页一键调用 |
+| 🔌 **模型服务** | 任意 **OpenAI 兼容接口**（OpenAI、DeepSeek、硅基流动、阿里百炼、火山方舟、OpenRouter、Ollama、One API / New API…）与 **ComfyUI**；一键获取模型列表并**按名称自动归类**为对话 / 图像 / 视频 / 语音；ComfyUI 支持多工作流、导入 JSON、`{{image}}` 参考图占位符 |
+| 🧭 **任务中心** | 顶栏实时显示进行中的生成任务，可取消；任务完成 / 失败时弹出通知；失败任务一键重试 |
+| ⚙️ **系统** | 浅色 / 深色 / 跟随系统主题与 5 种主题色；各能力默认模型、提示词优化模型；修改密码；**一键完整备份**（数据库快照 + 媒体文件） |
+
+<table>
+<tr><td><img src="docs/screenshots/chat.webp" alt="对话" /></td><td><img src="docs/screenshots/image.webp" alt="图像生成" /></td></tr>
+<tr><td><img src="docs/screenshots/viewer.webp" alt="作品查看器" /></td><td><img src="docs/screenshots/providers.webp" alt="模型服务" /></td></tr>
+</table>
 
 ## 部署
 
@@ -61,10 +76,11 @@ docker run -d --name pwd --restart unless-stopped \
 data/
 ├── pwd.db        # SQLite 数据库（配置、对话、任务、作品索引）
 ├── media/        # 生成与上传的文件
+├── thumbs/       # 缩略图缓存（可随时删除，会自动重建）
 └── .secret_key   # 会话签名密钥（首次启动自动生成）
 ```
 
-备份时停止容器后复制整个 `data` 目录即可。
+两种备份方式：在「系统设置 → 数据与备份」中一键下载完整备份 zip；或停止容器后直接复制整个 `data` 目录。恢复时把备份内容放回数据目录再启动即可。
 
 ### 更新
 
@@ -92,6 +108,30 @@ location / {
     proxy_buffering off;
     client_max_body_size 64m;
 }
+```
+
+## 模型配置指南
+
+在「模型服务」中添加服务后，点击「获取模型列表」→「自动分类填入」，再按需增删即可。几个常见搭配：
+
+| 服务 | 接口地址 | 对话 | 图像 | 视频 | 语音 | 高级设置 |
+|---|---|---|---|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | gpt-4o 等 | gpt-image-1 | sora-2 | tts-1、gpt-4o-mini-tts | 图生图：`/images/edits`；视频：OpenAI 风格 |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | DeepSeek / Qwen 等 | Kwai-Kolors/Kolors、Qwen-Image | Wan-AI/Wan2.2-T2V-A14B 等 | FunAudioLLM/CosyVoice2-0.5B | 图生图：请求体 image 字段；视频：硅基流动 |
+| DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat、deepseek-reasoner | – | – | – | – |
+| Ollama | `http://host.docker.internal:11434/v1` | 本地模型（含 llava 等视觉模型） | – | – | – | – |
+| ComfyUI | `http://host.docker.internal:8188` | – | 图像工作流 | 视频工作流 | – | 每个工作流标记为「图像」或「视频」 |
+
+- 「AI 优化提示词」默认使用默认对话模型，可在「系统设置 → 默认模型」中单独指定。
+- 各家对尺寸、时长等参数支持不同，不支持的参数可通过创作页「额外请求参数」（JSON）直接透传。
+- ComfyUI 工作流请在 ComfyUI 中使用「导出 (API)」获取；参考图使用 `LoadImage` 节点并把文件名写成 `{{image}}`。
+
+## 从旧版本升级
+
+直接拉取新镜像并重建容器即可，**数据库会在启动时自动迁移**（只增加字段，不改动已有数据），登录状态与历史数据全部保留；旧版本的实例会自动补充内置的角色与提示词示例。
+
+```bash
+docker compose pull && docker compose up -d
 ```
 
 ## 使用 Podman 部署
@@ -229,30 +269,36 @@ API 文档：`http://localhost:8080/api/docs`
 
 ## 技术栈与目录
 
-- 后端：FastAPI + SQLAlchemy + SQLite + httpx（`backend/`）
-- 前端：Vue 3 + Vite + vue-router（`frontend/`）
+- 后端：FastAPI + SQLAlchemy + SQLite + httpx + Pillow（`backend/`）
+- 前端：Vue 3 + Vite + Naive UI + lucide 图标 + marked / highlight.js（`frontend/`）
 - 单镜像：前端构建产物由后端直接托管
 
 ```
 backend/app/
 ├── main.py              # 应用入口、SPA 托管
-├── config.py            # 环境变量（极少）
-├── models.py            # 数据模型
-├── routers/             # install / auth / providers / chat / images / assets / prompts / system
-└── services/            # openai_compat / comfyui / tasks（后台任务）
+├── migrate.py           # 启动时自动补齐数据库字段
+├── seed.py              # 内置角色与提示词示例
+├── routers/             # install / auth / providers / chat / generate / assets / prompts / system
+└── services/            # openai_compat（对话/图像/视频/语音）/ comfyui / tasks（后台任务）/ media（缩略图）
 frontend/src/
-├── views/               # 各功能页面
-└── components/          # ProviderForm 等
+├── views/               # 工作台、对话、图像 / 视频 / 语音工作台、作品库、提示词与角色、模型服务、设置
+├── components/          # 任务流、任务中心、作品查看器、参考图选择、模型选择、提示词输入等
+└── composables/         # 主题、工作台通用逻辑
 ```
 
 ## 路线图
 
-- [ ] 图生图 / 局部重绘（参考图上传）
-- [ ] 视频生成（可灵、即梦、Runway 等异步任务接口）
-- [ ] 语音合成 / 音乐生成
+- [x] 对话：识图、推理过程、编辑重发、会话管理
+- [x] 图像：图生图、风格预设、AI 优化提示词
+- [x] 视频生成、语音合成
+- [x] 作品库批量管理、任务中心、一键备份
+- [ ] 局部重绘（蒙版编辑）、图像放大
 - [ ] 项目 / 分镜管理（参考 [Slate](https://github.com/coracoo/Slate) 的制作线思路）
+- [ ] 知识库 / 文件对话
 - [ ] 多用户与配额
 
 ## 参考
 
 - [coracoo/Slate](https://github.com/coracoo/Slate)：面向短片制作的本地 AIGC 工作台
+- [LobeChat](https://github.com/lobehub/lobe-chat)、[Open WebUI](https://github.com/open-webui/open-webui)：对话体验
+- [Fooocus](https://github.com/lllyasviel/Fooocus)、[InvokeAI](https://github.com/invoke-ai/InvokeAI)：生图工作台与风格预设
