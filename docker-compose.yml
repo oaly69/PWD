@@ -1,0 +1,16 @@
+# 最简部署：docker compose up -d，然后浏览器打开 http://服务器IP:8080 完成安装向导
+services:
+  pwd:
+    image: ghcr.io/oaly69/pwd:latest
+    container_name: pwd
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    # 访问宿主机上的 Ollama / ComfyUI 时使用 http://host.docker.internal:端口
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
