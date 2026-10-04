@@ -1,0 +1,32 @@
+# PWD 的 Podman Quadlet 单元文件（需要 Podman 4.4+）
+#
+# 普通用户（rootless，推荐）：复制到 ~/.config/containers/systemd/pwd.container
+# root 用户：            复制到 /etc/containers/systemd/pwd.container
+# 然后执行 systemctl [--user] daemon-reload && systemctl [--user] start pwd
+# 详见 README「使用 Podman 部署」。
+
+[Unit]
+Description=PWD 个人 AIGC 创作平台
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=pwd
+Image=ghcr.io/oaly69/pwd:latest
+PublishPort=8080:8080
+# %h 为当前用户的家目录；:Z 让 SELinux（Fedora / RHEL / CentOS）允许容器读写该目录
+Volume=%h/pwd/data:/data:Z
+# 可选：在 ~/pwd/.env 中写 PWD_INSTALL_TOKEN=... 等变量（文件不存在时请删除下一行）
+# EnvironmentFile=%h/pwd/.env
+HealthCmd=python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"
+HealthInterval=30s
+HealthStartPeriod=20s
+# 允许 podman auto-update 自动拉取新镜像
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
