@@ -31,6 +31,20 @@
       </n-input>
     </div>
 
+    <div class="boards">
+      <button class="board" :class="{ active: board === null }" @click="setBoard(null)"><LayoutGrid :size="14" />全部作品</button>
+      <button class="board" :class="{ active: board === 0 }" @click="setBoard(0)"><Inbox :size="14" />未归类</button>
+      <div v-for="b in boards" :key="b.id" class="board" :class="{ active: board === b.id }" @click="setBoard(b.id)">
+        <span class="covers"><img v-for="c in b.covers.slice(0, 1)" :key="c" :src="c" /><FolderOpen v-if="!b.covers.length" :size="14" /></span>
+        <span class="ellipsis bname">{{ b.name }}</span>
+        <span class="bcount">{{ b.count }}</span>
+        <n-dropdown trigger="click" :options="BOARD_MENU" @select="(k) => onBoardMenu(k, b)">
+          <button class="bmore" @click.stop><Ellipsis :size="13" /></button>
+        </n-dropdown>
+      </div>
+      <button class="board add" @click="editBoard()"><Plus :size="14" />新建作品集</button>
+    </div>
+
     <transition name="slide">
       <div v-if="selecting" class="batch-bar">
         <span>已选 <b>{{ selected.size }}</b> 项</span>
@@ -38,6 +52,9 @@
         <n-button size="small" quaternary :disabled="!selected.size" @click="selected = new Set()">清空</n-button>
         <span class="spacer" />
         <n-button size="small" secondary :disabled="!selected.size" @click="batch('favorite')"><template #icon><Star :size="14" /></template>收藏</n-button>
+        <n-dropdown trigger="click" :options="moveOptions" @select="moveSelected">
+          <n-button size="small" secondary :disabled="!selected.size"><template #icon><FolderInput :size="14" /></template>移到作品集</n-button>
+        </n-dropdown>
         <n-button size="small" secondary :disabled="!selected.size" @click="downloadZip"><template #icon><Download :size="14" /></template>打包下载</n-button>
         <n-button size="small" type="error" secondary :disabled="!selected.size" @click="batch('delete')"><template #icon><Trash2 :size="14" /></template>删除</n-button>
       </div>
@@ -76,17 +93,17 @@
     <div ref="sentinel" class="sentinel" />
 
     <div v-if="dragging" class="drop-mask"><Upload :size="40" /><div>松开即可上传到作品库</div></div>
-    <MediaViewer v-model:index="viewerIndex" :items="items" @deleted="onDeleted" />
+    <MediaViewer v-model:index="viewerIndex" :items="items" :boards="boards" @deleted="onDeleted" @changed="onChanged" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { NButton, NInput, NSelect, NTab, NTabs } from 'naive-ui'
-import { Check, Download, GalleryHorizontalEnd, Music, Play, Search, SquareCheck, Star, Trash2, Upload } from 'lucide-vue-next'
+import { computed, h, onMounted, onUnmounted, ref } from 'vue'
+import { NButton, NDropdown, NInput, NSelect, NTab, NTabs } from 'naive-ui'
+import { Check, Download, Ellipsis, FolderInput, FolderOpen, GalleryHorizontalEnd, Inbox, LayoutGrid, Music, Play, Plus, Search, SquareCheck, Star, Trash2, Upload } from 'lucide-vue-next'
 import EmptyState from '../components/EmptyState.vue'
 import MediaViewer from '../components/MediaViewer.vue'
-import { api, confirmDialog, toast, uploadFile } from '../api'
+import { api, confirmDialog, toast, ui, uploadFile } from '../api'
 import { downloadUrl } from '../utils/format'
 
 const SOURCES = [
@@ -118,7 +135,76 @@ let observer = null
 let resizeObs = null
 let searchTimer = null
 
-const hasFilter = computed(() => kind.value || source.value || model.value || favorite.value || q.value)
+const boards = ref([])
+const board = ref(null) // null 全部 / 0 未归类 / 作品集 ID
+const BOARD_MENU = [{ label: '重命名', key: 'rename' }, { label: '删除作品集', key: 'delete' }]
+const hasFilter = computed(() => kind.value || source.value || model.value || favorite.value || q.value || board.value !== null)
+const moveOptions = computed(() => [
+  ...boards.value.map((b) => ({ label: b.name, key: b.id })),
+  ...(boards.value.length ? [{ type: 'divider', key: 'd' }] : []),
+  { label: '移出作品集', key: 0 },
+  { label: '新建作品集…', key: 'new' },
+])
+
+async function loadBoards() {
+  boards.value = await api.get('/api/boards', { silent: true }).catch(() => [])
+}
+
+function setBoard(id) {
+  board.value = id
+  reload()
+}
+
+function editBoard(b) {
+  const name = ref(b?.name || '')
+  return new Promise((resolve) => {
+    ui.dialog.create({
+      title: b ? '重命名作品集' : '新建作品集',
+      content: () => h(NInput, { value: name.value, placeholder: '例如：秋季海报、角色设定', maxlength: 64, autofocus: true, 'onUpdate:value': (v) => { name.value = v } }),
+      positiveText: '保存',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        if (!name.value.trim()) return false
+        const r = b ? await api.patch(`/api/boards/${b.id}`, { name: name.value.trim() }) : await api.post('/api/boards', { name: name.value.trim() })
+        await loadBoards()
+        resolve(r)
+      },
+      onNegativeClick: () => resolve(null),
+      onClose: () => resolve(null),
+    })
+  })
+}
+
+async function onBoardMenu(key, b) {
+  if (key === 'rename') editBoard(b)
+  else if (key === 'delete') {
+    if (!(await confirmDialog({ title: '删除作品集', content: `删除「${b.name}」后，其中的 ${b.count} 个作品会变为未归类，不会被删除。`, positiveText: '删除' }))) return
+    await api.del(`/api/boards/${b.id}`)
+    if (board.value === b.id) board.value = null
+    await loadBoards()
+    reload()
+  }
+}
+
+async function moveSelected(key) {
+  let target = key
+  if (key === 'new') {
+    const b = await editBoard()
+    if (!b) return
+    target = b.id
+  }
+  const ids = [...selected.value]
+  await api.post('/api/assets/batch', { ids, action: 'move', board_id: target || null })
+  toast(target ? `已移入「${boards.value.find((b) => b.id === target)?.name || ''}」` : '已移出作品集', 'success')
+  await loadBoards()
+  if (board.value !== null) reload()
+  else items.value.forEach((a) => { if (selected.value.has(a.id)) a.board_id = target || null })
+}
+
+function onChanged(a) {
+  loadBoards()
+  if (board.value !== null && (a.board_id || 0) !== board.value) items.value = items.value.filter((x) => x.id !== a.id)
+}
 
 const ratio = (a) => {
   if (a.kind === 'image' && a.width && a.height) return `${a.width} / ${a.height}`
@@ -148,6 +234,7 @@ function params() {
   if (model.value) p.set('model', model.value)
   if (favorite.value) p.set('favorite', 'true')
   if (q.value.trim()) p.set('q', q.value.trim())
+  if (board.value !== null) p.set('board_id', board.value)
   return p
 }
 
@@ -230,7 +317,8 @@ async function upload(files) {
   try {
     for (const f of list) {
       try {
-        await uploadFile(f)
+        const a = await uploadFile(f)
+        if (board.value) await api.patch(`/api/assets/${a.id}`, { board_id: board.value })
         ok++
       } catch {
         /* 已提示 */
@@ -240,6 +328,7 @@ async function upload(files) {
     uploading.value = false
   }
   if (ok) toast(`已上传 ${ok} 个文件`, 'success')
+  if (board.value) loadBoards()
   reload()
 }
 
@@ -249,6 +338,7 @@ function onDrop(e) {
 }
 
 onMounted(async () => {
+  loadBoards()
   modelOpts.value = (await api.get('/api/assets/models')).map((m) => ({ label: m, value: m }))
   resizeObs = new ResizeObserver(([entry]) => { width.value = entry.contentRect.width })
   if (wall.value) resizeObs.observe(wall.value)
@@ -271,6 +361,17 @@ onUnmounted(() => {
 .f-select { width: 120px; }
 .f-select.wide { width: 200px; }
 .search { width: 220px; }
+.boards { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 12px; scrollbar-width: thin; }
+.board { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel); color: var(--text-2); font-size: 13px; cursor: pointer; max-width: 220px; }
+.board:hover { border-color: var(--primary); color: var(--text); }
+.board.active { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--panel)); color: var(--primary); font-weight: 600; }
+.board.add { border-style: dashed; }
+.covers { width: 22px; height: 22px; border-radius: 6px; overflow: hidden; display: grid; place-items: center; background: var(--panel-2); flex-shrink: 0; }
+.covers img { width: 100%; height: 100%; object-fit: cover; }
+.bname { min-width: 0; }
+.bcount { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.bmore { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px; border-radius: 4px; display: grid; place-items: center; }
+.bmore:hover { background: var(--panel-3); color: var(--text); }
 .batch-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; margin-bottom: 14px; border-radius: 12px; background: color-mix(in srgb, var(--primary) 8%, var(--panel)); border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); position: sticky; top: 0; z-index: 5; }
 .wall { display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 12px; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

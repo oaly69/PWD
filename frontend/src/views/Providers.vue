@@ -88,7 +88,7 @@ function openForm(p) {
   formKey.value++
   form.value = reactive(p
     ? { ...JSON.parse(JSON.stringify(p)), api_key: '' }
-    : { name: '', kind: 'openai', base_url: '', api_key: '', enabled: true, chat_models: [], image_models: [], video_models: [], tts_models: [], extra: {} })
+    : { name: '', kind: 'openai', base_url: '', api_key: '', enabled: true, chat_models: [], image_models: [], video_models: [], tts_models: [], embedding_models: [], stt_models: [], extra: {} })
   showForm.value = true
 }
 

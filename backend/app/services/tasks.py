@@ -5,15 +5,15 @@ import asyncio
 import logging
 
 from ..db import new_session
-from ..models import Asset, Provider, Task, utcnow
-from . import comfyui, openai_compat
+from ..models import Asset, Project, ProjectElement, Provider, Shot, Task, utcnow
+from . import comfyui, failover, imageops, openai_compat, policy
 from .media import image_size, read_media, save_media
 from .openai_compat import ProviderError
 
 log = logging.getLogger("pwd.tasks")
 
 # 不同类型任务各自的并发上限：视频任务耗时长，不应阻塞图像任务
-CONCURRENCY = {"image": 3, "video": 2, "tts": 3}
+CONCURRENCY = {"image": 3, "video": 2, "tts": 3, "render": 1}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _running: dict[int, asyncio.Task] = {}
 
@@ -26,14 +26,32 @@ def _sem(kind: str) -> asyncio.Semaphore:
     return _semaphores[kind]
 
 
-def recover_interrupted() -> None:
-    """服务重启时，把仍处于运行状态的任务标记为失败。"""
+def _resumable(task: Task, provider: Provider | None) -> bool:
+    """已提交到远端的异步任务（视频接口、ComfyUI）重启后可以继续轮询，不会重复提交。"""
+    if not task.external_id or provider is None:
+        return False
+    return task.kind == "video" or provider.kind == "comfyui"
+
+
+def recover_interrupted() -> list[int]:
+    """服务重启后恢复任务：排队中的重新提交；已提交到远端的异步任务继续轮询；
+    其余执行到一半的同步任务（如图像、语音）无法得知结果，标记为中断，可在任务中心重试。
+    返回需要重新提交的任务 ID。"""
+    resume: list[int] = []
     with new_session() as db:
-        for task in db.query(Task).filter(Task.status.in_(ACTIVE)).all():
-            task.status = "failed"
-            task.error = "服务重启，任务被中断"
-            task.finished_at = utcnow()
+        for task in db.query(Task).filter(Task.status.in_(ACTIVE)).order_by(Task.id).all():
+            provider = db.get(Provider, task.provider_id) if task.provider_id else None
+            if task.status == "pending" or _resumable(task, provider):
+                task.status = "pending"
+                resume.append(task.id)
+            else:
+                task.status = "failed"
+                task.error = "服务重启，任务被中断（可点击重试）"
+                task.finished_at = utcnow()
         db.commit()
+    if resume:
+        log.info("恢复 %d 个未完成的任务", len(resume))
+    return resume
 
 
 def submit(task_id: int) -> None:
@@ -72,9 +90,111 @@ def effective_prompt(task: Task) -> tuple[str, dict]:
     return prompt, params
 
 
-async def _execute(db, task: Task, provider: Provider) -> list[tuple[bytes, str]]:
+REMBG_PROMPT = "Remove the background completely and keep only the main subject with clean edges, transparent background."
+
+
+async def _execute_op(db, task: Task, provider: Provider | None, prompt: str, params: dict, on_progress) -> list[tuple[bytes, str]]:
+    """作品二次编辑：局部重绘 / 扩图 / 放大 / 去背景。"""
+    op = params["op"]
+    src = db.get(Asset, int(params.get("source_asset_id") or 0))
+    if src is None or src.kind != "image":
+        raise ProviderError("原图不存在或已被删除")
+    data = read_media(src.filename)
+
+    if op == "upscale":
+        scale = float(params.get("scale") or 2)
+        if provider is None:
+            return [(imageops.upscale_local(data, scale), "image/png")]
+        if provider.kind == "comfyui":
+            w, h = imageops.image_dims(data)
+            overrides = {"width": round(w * scale), "height": round(h * scale), "scale": scale}
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads={"image": (data, src.mime)}, overrides=overrides)
+        raise ProviderError("OpenAI 兼容接口没有通用的放大接口，请选择「本地放大」或 ComfyUI 放大工作流")
+
+    if provider is None:
+        raise ProviderError("模型服务不存在或已被删除")
+
+    if op == "rembg":
+        if provider.kind == "comfyui":
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads={"image": (data, src.mime)})
+        extra = dict(params.get("extra_body") or {})
+        if "gpt-image" in task.model:
+            extra.setdefault("background", "transparent")
+        return await openai_compat.edit_image(provider, task.model, prompt or REMBG_PROMPT, {**params, "extra_body": extra}, imageops.prepare_png(data))
+
+    if op in ("inpaint", "outpaint"):
+        if op == "inpaint":
+            if not params.get("mask_file"):
+                raise ProviderError("缺少蒙版")
+            base = data
+            mask = imageops.normalize_mask(read_media(params["mask_file"]), imageops.image_dims(data))
+        else:
+            e = params.get("expand") or {}
+            base, mask = imageops.outpaint_canvas(data, *(int(e.get(k) or 0) for k in ("left", "top", "right", "bottom")))
+        prep = imageops.prepare_inpaint(base, mask)
+        if provider.kind == "comfyui":
+            uploads = {"image": (prep["image_alpha"], "image/png"), "mask": (prep["mask"], "image/png")}
+            w, h = imageops.image_dims(base)
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads=uploads, overrides={"width": w, "height": h})
+        return await openai_compat.edit_image(
+            provider, task.model, prompt, params, prep["image"], mask=prep["openai_mask"], mask_white=prep["mask"]
+        )
+    raise ProviderError(f"未知的编辑操作：{op}")
+
+
+async def _render_project(db, task: Task, on_progress) -> list[tuple[bytes, str]]:
+    from . import render
+
+    project = db.get(Project, int((task.params or {}).get("project_id") or 0))
+    if project is None:
+        raise ProviderError("项目不存在")
+    rows = db.query(Shot).filter(Shot.project_id == project.id).order_by(Shot.idx, Shot.id).all()
+    files = {a.id: a.filename for a in db.query(Asset).filter(Asset.user_id == task.user_id).all()}
+    shots = [
+        {
+            "video": files.get(s.video_asset_id), "image": files.get(s.keyframe_asset_id), "audio": files.get(s.audio_asset_id),
+            "duration": s.duration, "dialogue": s.dialogue if (project.settings or {}).get("subtitles", True) else "",
+        }
+        for s in rows
+    ]
+    data, srt = await render.render(shots, project.aspect, lambda p: on_progress(p))
+    project.settings = {**(project.settings or {}), "srt": srt}
+    return [(data, "video/mp4")]
+
+
+def _valid_board(db, task: Task) -> int | None:
+    from ..models import Board
+
+    bid = (task.params or {}).get("board_id")
+    board = db.get(Board, int(bid)) if bid else None
+    return board.id if board is not None and board.user_id == task.user_id else None
+
+
+def _link_outputs(db, task: Task, assets: list[Asset]) -> None:
+    """把生成结果关联回短片项目的镜头 / 角色 / 成片。"""
+    params = task.params or {}
+    if not assets:
+        return
+    first = assets[0]
+    if params.get("shot_id"):
+        shot = db.get(Shot, int(params["shot_id"]))
+        slot = params.get("slot")
+        if shot is not None and slot in ("keyframe", "video", "audio"):
+            setattr(shot, f"{slot}_asset_id", first.id)
+            shot.tasks = {k: v for k, v in (shot.tasks or {}).items() if v != task.id}
+    if params.get("element_id"):
+        el = db.get(ProjectElement, int(params["element_id"]))
+        if el is not None:
+            el.ref_asset_id = first.id
+            el.task_id = None
+    if task.kind == "render" and params.get("project_id"):
+        project = db.get(Project, int(params["project_id"]))
+        if project is not None:
+            project.output_asset_id = first.id
+
+
+async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[bytes, str]]:
     prompt, params = effective_prompt(task)
-    refs = _load_references(db, params.get("reference_asset_ids"))
 
     async def on_progress(progress: int, external_id: str = "") -> None:
         changed = False
@@ -87,19 +207,47 @@ async def _execute(db, task: Task, provider: Provider) -> list[tuple[bytes, str]
         if changed:
             db.commit()
 
+    if task.kind == "render":
+        return await _render_project(db, task, on_progress)
+    if params.get("op"):
+        return await _execute_op(db, task, provider, prompt, params, on_progress)
+    assert provider is not None
+    refs = _load_references(db, params.get("reference_asset_ids"))
+    # 重启后继续轮询已提交的远端任务
+    resume = {"resume_id": task.external_id} if task.external_id else {}
     if provider.kind == "comfyui":
         if task.kind == "tts":
             raise ProviderError("ComfyUI 暂不支持语音合成")
-        return await comfyui.generate(provider, task.model, prompt, params, refs, on_progress)
+        return await comfyui.generate(provider, task.model, prompt, params, refs, on_progress, **resume)
     if task.kind == "image":
         return await openai_compat.generate_images(provider, task.model, prompt, params, refs)
     if task.kind == "video":
         return await openai_compat.generate_video(
-            provider, task.model, prompt, params, refs[0] if refs else None, on_progress
+            provider, task.model, prompt, params, refs[0] if refs else None, on_progress, **resume
         )
     if task.kind == "tts":
         return [await openai_compat.speech(provider, task.model, task.prompt, params)]
     raise ProviderError(f"未知任务类型：{task.kind}")
+
+
+async def _execute_with_failover(db, task: Task, provider: Provider | None) -> tuple[list[tuple[bytes, str]], Provider | None]:
+    """执行任务；可重试的错误（网络、限流、5xx）自动切换到提供同名模型的其他服务。"""
+    if provider is None:
+        return await _execute(db, task, None), None
+    kind = "image" if (task.params or {}).get("op") else task.kind
+    cands = failover.candidates(db, provider, task.model, kind)
+    for n, cand in enumerate(cands):
+        try:
+            outputs = await _execute(db, task, cand)
+        except Exception as exc:
+            if n + 1 < len(cands) and failover.retryable(exc):
+                log.info("task %s: %s 失败（%s），切换到 %s", task.id, cand.name, exc, cands[n + 1].name)
+                continue
+            raise
+        if cand.id != provider.id:
+            task.params = {**(task.params or {}), "served_by": cand.name}
+        return outputs, cand
+    raise ProviderError("没有可用的模型服务")
 
 
 async def _run(task_id: int) -> None:
@@ -112,17 +260,25 @@ async def _run(task_id: int) -> None:
                 provider = db.get(Provider, task.provider_id) if task.provider_id else None
                 task.status = "running"
                 db.commit()
-                if provider is None:
+                if provider is None and not (task.params or {}).get("op") and task.kind != "render":
                     raise ProviderError("模型服务不存在或已被删除")
-                outputs = await _execute(db, task, provider)
+                outputs, served = await _execute_with_failover(db, task, provider)
+                created: list[Asset] = []
                 for data, mime in outputs:
                     filename = save_media(data, mime)
                     kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else task.kind
                     w, h = image_size(data) if kind == "image" else (0, 0)
-                    db.add(Asset(
-                        kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
+                    asset = Asset(
+                        user_id=task.user_id, kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
                         width=w, height=h, prompt=task.prompt, model=task.model, task_id=task.id,
-                    ))
+                        board_id=_valid_board(db, task),
+                    )
+                    db.add(asset)
+                    created.append(asset)
+                db.flush()
+                _link_outputs(db, task, created)
+                if served is not None:  # 本地放大不计入用量
+                    policy.record_usage(db, task.user_id, task.kind, served.id, task.model, max(1, len(outputs)))
                 task.status = "succeeded"
                 task.progress = 100
         except asyncio.CancelledError:

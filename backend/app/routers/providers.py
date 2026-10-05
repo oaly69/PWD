@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, require_admin
+from ..models import User
 from ..models import Provider
 from ..security import mask_secret
-from ..services import comfyui, openai_compat
+from ..services import comfyui, openai_compat, policy
+from ..services.audit import audit
 from ..services.openai_compat import ProviderError
 
-router = APIRouter(prefix="/api/providers", tags=["providers"], dependencies=[Depends(current_user)])
+router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
 class ProviderIn(BaseModel):
@@ -26,6 +28,8 @@ class ProviderIn(BaseModel):
     image_models: list[str] = []
     video_models: list[str] = []
     tts_models: list[str] = []
+    embedding_models: list[str] = []
+    stt_models: list[str] = []
     extra: dict[str, Any] = {}
 
 
@@ -51,6 +55,8 @@ def apply_provider(provider: Provider, body: ProviderIn) -> None:
     provider.image_models = _clean_models(body.image_models)
     provider.video_models = _clean_models(body.video_models)
     provider.tts_models = _clean_models(body.tts_models) if body.kind == "openai" else []
+    provider.embedding_models = _clean_models(body.embedding_models) if body.kind == "openai" else []
+    provider.stt_models = _clean_models(body.stt_models) if body.kind == "openai" else []
     provider.extra = body.extra or {}
     if body.kind == "comfyui":
         workflows = provider.extra.get("workflows") or {}
@@ -75,6 +81,8 @@ def provider_out(p: Provider) -> dict[str, Any]:
         "image_models": p.image_models or [],
         "video_models": p.video_models or [],
         "tts_models": p.tts_models or [],
+        "embedding_models": p.embedding_models or [],
+        "stt_models": p.stt_models or [],
         "extra": p.extra or {},
     }
 
@@ -97,16 +105,22 @@ _IMAGE_HINTS = ("image", "dall-e", "flux", "kolors", "stable-diffusion", "sdxl",
 _VIDEO_HINTS = ("video", "sora", "veo", "kling", "wan2", "wan-", "hunyuanvideo", "seedance", "hailuo", "cogvideo",
                 "runway", "pika", "vidu", "ltx")
 _TTS_HINTS = ("tts", "speech", "cosyvoice", "fish-speech", "fishaudio", "indextts", "moss-tts", "voice")
-_SKIP_HINTS = ("embed", "rerank", "whisper", "asr", "moderation", "sensevoice", "bge-", "transcribe")
+_EMBED_HINTS = ("embed", "bge-", "m3e", "gte-", "jina-embeddings")
+_STT_HINTS = ("whisper", "asr", "sensevoice", "transcribe", "paraformer", "telespeech")
+_SKIP_HINTS = ("rerank", "moderation")
 
 
 def classify_models(models: list[str]) -> dict[str, list[str]]:
     """按名称特征把模型粗略归类为 文本 / 图像 / 视频 / 语音，供前端一键勾选。"""
-    out: dict[str, list[str]] = {"chat": [], "image": [], "video": [], "tts": [], "other": []}
+    out: dict[str, list[str]] = {"chat": [], "image": [], "video": [], "tts": [], "embedding": [], "stt": [], "other": []}
     for m in models:
         low = m.lower()
         if any(h in low for h in _SKIP_HINTS):
             out["other"].append(m)
+        elif any(h in low for h in _EMBED_HINTS):
+            out["embedding"].append(m)
+        elif any(h in low for h in _STT_HINTS):
+            out["stt"].append(m)
         elif any(h in low for h in _VIDEO_HINTS):
             out["video"].append(m)
         elif any(h in low for h in _TTS_HINTS):
@@ -125,21 +139,47 @@ def _get(db: Session, provider_id: int) -> Provider:
     return p
 
 
+def provider_public(p: Provider, group=None) -> dict[str, Any]:
+    """普通用户可见的信息：只包含选择模型所需的字段（按用户组过滤），不暴露地址、Key 与工作流。"""
+    extra = p.extra or {}
+    return {
+        "id": p.id,
+        "name": p.name,
+        "kind": p.kind,
+        "enabled": p.enabled,
+        "chat_models": policy.filter_models(group, p.id, "chat", p.chat_models or []),
+        "image_models": policy.filter_models(group, p.id, "image", p.image_models or []),
+        "video_models": policy.filter_models(group, p.id, "video", p.video_models or []),
+        "tts_models": policy.filter_models(group, p.id, "tts", p.tts_models or []),
+        "embedding_models": p.embedding_models or [],
+        "stt_models": [],
+        "extra": {k: extra[k] for k in ("image_edit_mode", "video_api") if k in extra},
+    }
+
+
 @router.get("")
-def list_providers(db: Session = Depends(get_db)):
-    return [provider_out(p) for p in db.query(Provider).order_by(Provider.id).all()]
+def list_providers(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = db.query(Provider).order_by(Provider.id).all()
+    if user.is_admin:
+        return [provider_out(p) for p in rows]
+    group = policy.group_of(db, user)
+    return [provider_public(p, group) for p in rows if p.enabled]
 
 
-@router.get("/comfyui/example")
+@router.get("/comfyui/example", dependencies=[Depends(require_admin)])
 def comfyui_example():
-    return {"workflows": {"SDXL 文生图": comfyui.EXAMPLE_WORKFLOW}}
+    return {"workflows": {
+        "SDXL 文生图": comfyui.EXAMPLE_WORKFLOW,
+        "SDXL 局部重绘": comfyui.EXAMPLE_INPAINT,
+        "4x 高清放大": comfyui.EXAMPLE_UPSCALE,
+    }}
 
 
 class DraftTestIn(ProviderIn):
     id: int | None = None  # 编辑已有服务且未填写新 Key 时，沿用已保存的 Key
 
 
-@router.post("/test-draft")
+@router.post("/test-draft", dependencies=[Depends(require_admin)])
 async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
     """测试尚未保存的配置（用于表单中的“测试连接 / 获取模型”）。"""
     tmp = Provider()
@@ -151,35 +191,40 @@ async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_provider(body: ProviderIn, db: Session = Depends(get_db)):
+def create_provider(body: ProviderIn, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     p = Provider()
     apply_provider(p, body)
     db.add(p)
+    audit(db, admin, "provider.create", p.name, p.base_url, request)
     db.commit()
     return provider_out(p)
 
 
 @router.put("/{provider_id}")
-def update_provider(provider_id: int, body: ProviderIn, db: Session = Depends(get_db)):
+def update_provider(provider_id: int, body: ProviderIn, request: Request, db: Session = Depends(get_db),
+                    admin: User = Depends(require_admin)):
     p = _get(db, provider_id)
     apply_provider(p, body)
+    audit(db, admin, "provider.update", p.name, "更换了 API Key" if body.api_key else "", request)
     db.commit()
     return provider_out(p)
 
 
 @router.delete("/{provider_id}")
-def delete_provider(provider_id: int, db: Session = Depends(get_db)):
-    db.delete(_get(db, provider_id))
+def delete_provider(provider_id: int, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    p = _get(db, provider_id)
+    audit(db, admin, "provider.delete", p.name, p.base_url, request)
+    db.delete(p)
     db.commit()
     return {"ok": True}
 
 
-@router.post("/{provider_id}/test")
+@router.post("/{provider_id}/test", dependencies=[Depends(require_admin)])
 async def test_provider(provider_id: int, db: Session = Depends(get_db)):
     return await test_provider_connection(_get(db, provider_id))
 
 
-@router.get("/{provider_id}/remote-models")
+@router.get("/{provider_id}/remote-models", dependencies=[Depends(require_admin)])
 async def remote_models(provider_id: int, db: Session = Depends(get_db)):
     p = _get(db, provider_id)
     if p.kind != "openai":

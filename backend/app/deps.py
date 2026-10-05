@@ -9,6 +9,9 @@ from .security import COOKIE_NAME, decode_session_token
 from .site import is_installed
 
 
+STATUS_MESSAGE = {"pending": "账号正在等待管理员审核", "disabled": "账号已被禁用"}
+
+
 def require_installed(db: Session = Depends(get_db)) -> None:
     if not is_installed(db):
         raise HTTPException(status_code=409, detail="系统尚未安装，请先完成安装向导")
@@ -28,4 +31,12 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     user = db.get(User, int(payload["sub"]))
     if user is None or user.token_version != payload.get("ver"):
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if user.status != "active":
+        raise HTTPException(status_code=401, detail=STATUS_MESSAGE.get(user.status, "账号不可用"))
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="需要管理员权限")
     return user

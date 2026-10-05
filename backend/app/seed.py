@@ -1,51 +1,77 @@
-"""安装时写入的内置示例：对话角色与图像提示词模板。"""
+"""内置模板：对话角色、图像提示词、视频提示词。
+
+模板数据存放在 seed_data/{chat,image,video}.json，每条包含 icon / title / group / content（图像可含 negative）。
+内置模板 user_id 为空（公共）且 builtin=True。数据版本号记录在设置项 builtin_seed_version 中，
+升级时只补充缺少的模板，不会覆盖或恢复用户已删除的模板。
+"""
 from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from .models import PromptTemplate
+from .models import PromptTemplate, User
 
-ROLES = [
-    ("✍️", "文案策划", "你是一名资深新媒体文案策划，擅长小红书、公众号、短视频脚本的写作。"
-     "根据用户给出的主题，先确认目标人群与平台，再给出 3 个不同风格的标题和正文，语言生动、有记忆点，适度使用 emoji。"),
-    ("🎬", "分镜编剧", "你是一名短片编剧兼分镜师。根据用户的故事梗概，输出：1) 一句话 logline；2) 分场大纲；"
-     "3) 分镜表（镜号、景别、画面描述、台词/旁白、时长）。画面描述要可以直接用作 AI 绘图 / 视频提示词。"),
-    ("🎨", "绘画提示词专家", "你是 AI 绘画提示词专家。用户描述想要的画面后，输出中文和英文两版高质量提示词，"
-     "包含主体、细节、环境、构图、光影、风格、画质关键词，并附一行反向提示词。"),
-    ("🌐", "中英翻译", "你是专业译者。用户输入中文时翻译为地道的英文，输入其他语言时翻译为流畅的简体中文。"
-     "保持原文格式，专有名词保留原文，只输出译文。"),
-    ("🧠", "头脑风暴", "你是创意顾问。针对用户的主题，从不同角度给出至少 10 个有新意的点子，每个点子一句话说明亮点，"
-     "最后挑出你最推荐的 3 个并说明理由。"),
-]
+SEED_VERSION = 2
+DATA_DIR = Path(__file__).resolve().parent / "seed_data"
+CATEGORIES = ("chat", "image", "video")
 
-IMAGE_PROMPTS = [
-    ("🌆", "赛博朋克城市", "雨夜的赛博朋克城市街道，霓虹灯招牌倒映在湿漉漉的路面上，飞行汽车穿梭在高楼之间，"
-     "电影感构图，蓝紫色调，体积光，超高细节，8k", "模糊, 低质量, 变形, 水印, 文字"),
-    ("🏮", "国风山水", "水墨国风山水画，云雾缭绕的青山，一叶扁舟行于江上，远处有亭台楼阁，留白构图，淡雅色彩，宣纸质感",
-     "现代建筑, 照片, 低质量"),
-    ("📷", "人像写真", "窗边自然光下的人像写真，柔和侧光，浅景深虚化背景，胶片质感，温暖色调，85mm 镜头，细腻肤质",
-     "畸形手指, 多余肢体, 过度磨皮, 低质量"),
-    ("🧸", "3D 可爱角色", "一只圆滚滚的小熊 3D 角色，皮克斯风格，柔软毛绒质感，大眼睛，站在糖果色背景前，柔和打光，C4D 渲染，高清",
-     "恐怖, 低质量, 噪点"),
-    ("🍜", "美食摄影", "一碗热气腾腾的红烧牛肉面，俯拍角度，木质桌面，旁边点缀葱花和辣椒，商业美食摄影，自然光，诱人色泽",
-     "模糊, 过曝, 低质量"),
-]
+# v0.2 安装时写入的示例标题（当时没有 builtin 标记，升级时据此识别）
+LEGACY_BUILTIN_TITLES = {
+    ("chat", "文案策划"), ("chat", "分镜编剧"), ("chat", "绘画提示词专家"), ("chat", "中英翻译"), ("chat", "头脑风暴"),
+    ("image", "赛博朋克城市"), ("image", "国风山水"), ("image", "人像写真"), ("image", "3D 可爱角色"), ("image", "美食摄影"),
+}
+
+
+@lru_cache
+def builtin_templates() -> dict[str, list[dict]]:
+    return {c: json.loads((DATA_DIR / f"{c}.json").read_text(encoding="utf-8")) for c in CATEGORIES}
+
+
+def _add_builtins(db: Session, skip: set[tuple[str, str]] | None = None) -> int:
+    skip = skip or set()
+    n = 0
+    for category, items in builtin_templates().items():
+        for it in items:
+            if (category, it["title"]) in skip:
+                continue
+            db.add(PromptTemplate(
+                user_id=None, builtin=True, category=category, title=it["title"], icon=it.get("icon", ""),
+                group=it.get("group", ""), content=it["content"], negative=it.get("negative", ""),
+            ))
+            n += 1
+    return n
 
 
 def seed_defaults(db: Session) -> None:
+    """全新安装时写入全部内置模板。"""
     from .site import set_setting
 
+    _add_builtins(db)
+    set_setting(db, "builtin_seed_version", SEED_VERSION)
     set_setting(db, "builtin_seeded", True)
-    for icon, title, content in ROLES:
-        db.add(PromptTemplate(title=title, category="chat", icon=icon, content=content))
-    for icon, title, content, negative in IMAGE_PROMPTS:
-        db.add(PromptTemplate(title=title, category="image", icon=icon, content=content, negative=negative))
 
 
 def seed_if_upgraded(db: Session) -> None:
-    """从旧版本升级的实例补充一次内置示例（只执行一次，用户删除后不会再加回来）。"""
-    from .site import get_setting, is_installed
+    """旧版本升级：整理历史模板归属并补充新增的内置模板（每个版本只执行一次）。"""
+    from .site import get_setting, is_installed, set_setting
 
-    if is_installed(db) and not get_setting(db, "builtin_seeded"):
-        seed_defaults(db)
-        db.commit()
+    if not is_installed(db):
+        return
+    version = get_setting(db, "builtin_seed_version") or 0
+    if version >= SEED_VERSION:
+        return
+    admin = db.query(User).filter(User.is_admin.is_(True)).order_by(User.id).first()
+    for p in db.query(PromptTemplate).filter(PromptTemplate.user_id.is_(None), PromptTemplate.builtin.is_(False)).all():
+        if (p.category, p.title) in LEGACY_BUILTIN_TITLES:
+            db.delete(p)  # 旧版示例由新版内置模板替代
+        elif admin is not None:
+            p.user_id = admin.id  # 单用户时代自建的模板归管理员私有
+    db.flush()
+    existing = {(p.category, p.title) for p in db.query(PromptTemplate).filter(PromptTemplate.builtin.is_(True)).all()}
+    _add_builtins(db, skip=existing)
+    set_setting(db, "builtin_seed_version", SEED_VERSION)
+    set_setting(db, "builtin_seeded", True)
+    db.commit()

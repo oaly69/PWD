@@ -1,0 +1,21 @@
+{
+  "name": "PWD 创作台",
+  "short_name": "PWD",
+  "description": "个人 AIGC 创作平台：对话、图像、视频、语音与短片制作",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f5f8",
+  "theme_color": "#6d5dfc",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "新对话", "url": "/chat" },
+    { "name": "图像生成", "url": "/image" },
+    { "name": "作品库", "url": "/gallery" }
+  ]
+}

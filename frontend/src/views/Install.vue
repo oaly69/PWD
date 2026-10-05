@@ -61,7 +61,7 @@ const step = ref(0)
 const status = ref({})
 const confirm = ref('')
 const form = reactive({ site_name: 'PWD 创作台', admin_username: 'admin', admin_password: '', install_token: '' })
-const provider = reactive({ name: '', kind: 'openai', base_url: '', api_key: '', chat_models: [], image_models: [], video_models: [], tts_models: [], extra: {} })
+const provider = reactive({ name: '', kind: 'openai', base_url: '', api_key: '', chat_models: [], image_models: [], video_models: [], tts_models: [], embedding_models: [], stt_models: [], extra: {} })
 const submitting = ref(false)
 const pform = ref(null)
 

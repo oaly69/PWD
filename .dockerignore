@@ -8,3 +8,4 @@ backend/tests
 data
 .env
 docs
+e2e

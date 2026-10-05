@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .config import VERSION, settings
-from .routers import assets, auth, chat, generate, install, prompts, providers, system
+from .routers import admin, assets, auth, chat, generate, install, knowledge, projects, prompts, providers, system, users
 from .seed import seed_if_upgraded
 from .services import tasks
 
@@ -21,19 +22,39 @@ log = logging.getLogger("pwd")
 async def lifespan(_app: FastAPI):
     if db.engine is None:
         db.init_engine()
-    tasks.recover_interrupted()
+    for task_id in tasks.recover_interrupted():
+        tasks.submit(task_id)
     with db.new_session() as session:
         seed_if_upgraded(session)
     log.info("PWD %s 已启动，数据目录：%s", VERSION, settings.data_dir)
     if settings.install_token:
         log.info("已启用安装令牌保护（PWD_INSTALL_TOKEN）")
+    from .services import storage
+
+    janitor = None
+    if storage.enabled():
+        log.info("已启用对象存储：%s/%s", settings.s3_endpoint, settings.s3_bucket)
+
+        async def clean_cache() -> None:
+            while True:
+                await asyncio.sleep(6 * 3600)
+                try:
+                    n = await asyncio.to_thread(storage.evict_cache)
+                    if n:
+                        log.info("已清理 %d 个本地缓存文件", n)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("清理本地缓存失败：%s", exc)
+
+        janitor = asyncio.create_task(clean_cache())
     yield
+    if janitor:
+        janitor.cancel()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="PWD - 个人 AIGC 创作平台", version=VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
-    for r in (system.router, install.router, auth.router, providers.router, chat.router, generate.router, assets.router, prompts.router):
+    for r in (system.router, install.router, auth.router, providers.router, chat.router, generate.router, assets.router, prompts.router, users.router, admin.router, knowledge.router, projects.router):
         app.include_router(r)
 
     static_dir = settings.static_dir
@@ -47,6 +68,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = (static_dir / full_path).resolve()
         if full_path and candidate.is_relative_to(static_dir.resolve()) and candidate.is_file():
+            if full_path == "sw.js":  # Service Worker 需要及时更新，并允许控制整个站点
+                return FileResponse(candidate, media_type="text/javascript",
+                                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+            if full_path.endswith(".webmanifest"):
+                return FileResponse(candidate, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
             return FileResponse(candidate)
         if index.is_file():
             return FileResponse(index, headers={"Cache-Control": "no-cache"})

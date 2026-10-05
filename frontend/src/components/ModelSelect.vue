@@ -1,17 +1,20 @@
 <template>
   <n-select
-    :value="modelValue || null"
+    :value="multiple ? modelValue || [] : modelValue || null"
     :options="options"
     :size="size"
+    :multiple="multiple"
+    :max-tag-count="multiple ? 'responsive' : undefined"
     filterable
     :placeholder="placeholder"
     :consistent-menu-width="false"
-    @update:value="(v) => emit('update:modelValue', v || '')"
+    @update:value="(v) => emit('update:modelValue', multiple ? v || [] : v || '')"
   >
     <template #empty>
       <div class="empty">
         暂无可用{{ LABEL[kind] }}模型
-        <router-link to="/providers">去配置模型服务 →</router-link>
+        <router-link v-if="store.user?.is_admin" to="/providers">去配置模型服务 →</router-link>
+        <span v-else>请联系管理员配置</span>
       </div>
     </template>
   </n-select>
@@ -23,13 +26,14 @@ import { NSelect } from 'naive-ui'
 import { loadProviders, modelOptions, store } from '../store'
 
 const props = defineProps({
-  modelValue: { type: String, default: '' },
+  modelValue: { type: [String, Array], default: '' },
+  multiple: { type: Boolean, default: false },
   kind: { type: String, default: 'chat' },
   size: { type: String, default: 'medium' },
   placeholder: { type: String, default: '选择模型' },
 })
 const emit = defineEmits(['update:modelValue'])
-const LABEL = { chat: '对话', image: '图像', video: '视频', tts: '语音' }
+const LABEL = { chat: '对话', image: '图像', video: '视频', tts: '语音', embedding: '向量', stt: '语音识别' }
 
 const options = computed(() => {
   void store.providers

@@ -11,19 +11,28 @@
 
 | 模块 | 能力 |
 |---|---|
-| 💬 **对话** | 多会话、流式输出、Markdown 与代码高亮；**识图**（粘贴 / 拖拽图片给视觉模型）；**推理过程**展示（DeepSeek-R1 等 `reasoning_content` 与 `<think>`）；编辑消息后重新生成、中途停止、重新生成；会话**置顶 / 搜索 / 按日期分组 / AI 命名 / 导出 Markdown**；每个对话独立的角色设定与模型参数（温度、Top P、最大长度、上下文条数） |
-| 🎨 **图像** | 文生图、**图生图 / 图像编辑**（上传、粘贴、拖拽或从作品库选参考图）；**12 种风格预设**；**AI 优化提示词**；可视化画幅比例、批量生成、种子、反向提示词、额外请求参数；结果一键「作为参考图」继续迭代 |
+| 💬 **对话** | 多会话、流式输出、Markdown 与代码高亮；**识图**（粘贴 / 拖拽图片给视觉模型）；**推理过程**展示（DeepSeek-R1 等 `reasoning_content` 与 `<think>`）；**对话分支**（编辑任意消息或对任意回答重新生成都会保留原版本，可随时 ‹ 1/2 › 切换）；**多模型对比**（同一问题同时问 2～4 个模型，回答并排展示，选用其一继续对话）；中途停止；会话**置顶 / 搜索 / 按日期分组 / AI 命名 / 导出 Markdown**；每个对话独立的角色设定与模型参数（温度、Top P、最大长度、上下文条数） |
+| 📚 **知识库** | 上传 PDF、Word、PPT、Excel、Markdown、TXT、HTML、EPUB 等文档建立知识库；配置向量模型时使用**语义检索**，未配置时使用关键词检索（无需任何模型）；对话中勾选知识库后自动检索并**标注引用来源** |
+| 🧰 **工具与联网** | **联网搜索**（SearXNG / Tavily / 博查），回答附带来源链接；**工具调用**：模型可在对话中直接生成图片、联网搜索、检索知识库；接入 **MCP 服务**（Streamable HTTP）扩展任意工具；对话中可直接附带文档；**语音输入** |
+| 🎨 **图像** | 文生图、**图生图 / 图像编辑**（上传、粘贴、拖拽或从作品库选参考图）；**12 种风格预设**；**AI 优化提示词**；可视化画幅比例、批量生成、种子、反向提示词、额外请求参数；结果一键「作为参考图」继续迭代；**多模型对比生成** |
+| 🪄 **图像编辑** | 在作品上直接编辑并另存为新作品：**局部重绘**（画笔涂抹蒙版、擦除、反选、撤销）、**扩图**（四周扩展 / 一键转 16:9、9:16、1:1）、**高清放大**（本地 Lanczos 免费放大，或 ComfyUI 放大模型）、**去除背景**；支持 OpenAI `/images/edits` 与 ComfyUI 工作流 |
 | 🎬 **视频** | 文生视频、**首帧图生视频**；支持 OpenAI Sora 风格（`/videos`）与硅基流动（`/video/submit`）两种异步接口及 ComfyUI 视频工作流；进度显示，可离开页面，完成后通知 |
+| 🎞️ **短片项目** | 参考 [Slate](https://github.com/coracoo/Slate) 的制作线：一句话创意 → **AI 写剧本** → **提取角色与场景**并生成参考图（外观描述 + 参考图保证多镜头一致）→ **AI 拆分镜** → 批量生成**关键帧、镜头视频（以关键帧为首帧）与配音** → 时间线预览 → **FFmpeg 一键合成成片**（无视频的镜头用关键帧缓慢推镜，自动按配音延长，内嵌字幕轨并可下载 SRT）；可导出分镜表，项目作品自动归入作品集 |
 | 🔊 **语音** | OpenAI 兼容 `/audio/speech`：多音色（含硅基流动 CosyVoice）、语速、输出格式、语气指令 |
 
 ### 管理
 
 | 模块 | 能力 |
 |---|---|
-| 🖼️ **作品库** | 按真实比例排布的瀑布流、无限滚动；按类型 / 来源 / 模型 / 收藏筛选与搜索；**多选批量收藏、打包下载、删除**；大图查看器展示完整生成参数，可「复用参数」「作为参考图」「生成视频」；拖拽上传素材；自动生成缩略图 |
-| 📝 **提示词与角色** | 对话角色（带图标的系统提示词）与图像提示词模板，内置常用示例；创作页一键调用 |
-| 🔌 **模型服务** | 任意 **OpenAI 兼容接口**（OpenAI、DeepSeek、硅基流动、阿里百炼、火山方舟、OpenRouter、Ollama、One API / New API…）与 **ComfyUI**；一键获取模型列表并**按名称自动归类**为对话 / 图像 / 视频 / 语音；ComfyUI 支持多工作流、导入 JSON、`{{image}}` 参考图占位符 |
-| 🧭 **任务中心** | 顶栏实时显示进行中的生成任务，可取消；任务完成 / 失败时弹出通知；失败任务一键重试 |
+| 🖼️ **作品库** | **作品集**（按项目 / 主题归类，批量移入）；按真实比例排布的瀑布流、无限滚动；按类型 / 来源 / 模型 / 收藏筛选与搜索；**多选批量收藏、打包下载、删除**；大图查看器展示完整生成参数，可「复用参数」「作为参考图」「生成视频」；拖拽上传素材；自动生成缩略图 |
+| 📝 **提示词与角色** | 内置 **100 个对话角色、100 个图像提示词、100 个视频提示词**，按分组筛选与搜索；支持**模板变量** `{{主题}}` / `{{风格|默认值}}`，使用时弹出表单填写；可保存个人模板，管理员可共享模板给所有用户；创作页与对话页一键调用 |
+| 👥 **多用户** | 管理员 / 普通用户两种角色；管理员可添加用户、重置密码、禁用、删除；可开放注册并设置是否需要审核；各用户的对话、作品、任务、个人模板相互隔离，模型服务由管理员统一配置 |
+| 🛡️ **用户组与配额** | 按用户组限制可用的能力（对话 / 图像 / 视频 / 语音）与**模型白名单**；设置**每日对话条数、图片张数、视频个数、语音条数与每月 Token 上限**；新注册用户可自动加入默认组 |
+| 📊 **用量统计** | 记录每次对话与生成的用量（优先使用服务返回的真实 Token 数，缺失时按字数估算）；管理员可查看每日趋势、按用户 / 按模型汇总；用户可在「我的用量」查看剩余额度 |
+| 🔁 **故障切换** | 请求遇到网络错误、限流（429）或 5xx 时，自动切换到提供**同名模型**的其他服务，按优先级尝试；对话中会标注实际提供服务的渠道 |
+| 🔐 **安全** | **两步验证**（TOTP，兼容各类验证器 App）；**OIDC 单点登录**（Authentik / Keycloak / Logto / Casdoor 等，支持自动建号与已有账号绑定）；**操作日志**（登录、权限、模型服务与系统设置变更） |
+| 🔌 **模型服务** | 任意 **OpenAI 兼容接口**（OpenAI、DeepSeek、硅基流动、阿里百炼、火山方舟、OpenRouter、Ollama、One API / New API…）与 **ComfyUI**；一键获取模型列表并**按名称自动归类**为对话 / 图像 / 视频 / 语音；ComfyUI 支持多工作流、导入 JSON、内置文生图 / 局部重绘 / 放大示例工作流 |
+| 🧭 **任务中心** | 顶栏实时显示进行中的生成任务，可取消；任务完成 / 失败时弹出通知；失败任务一键重试；**服务重启后自动恢复**未完成的任务 |
 | ⚙️ **系统** | 浅色 / 深色 / 跟随系统主题与 5 种主题色；各能力默认模型、提示词优化模型；修改密码；**一键完整备份**（数据库快照 + 媒体文件） |
 
 <table>
@@ -82,6 +91,20 @@ data/
 
 两种备份方式：在「系统设置 → 数据与备份」中一键下载完整备份 zip；或停止容器后直接复制整个 `data` 目录。恢复时把备份内容放回数据目录再启动即可。
 
+### 对象存储（可选）
+
+媒体文件默认保存在本地 `data/media`。设置以下环境变量后可改用 S3 兼容的对象存储（AWS S3、MinIO、Cloudflare R2、阿里云 OSS、腾讯云 COS 等）：
+
+```env
+PWD_S3_ENDPOINT=http://minio:9000
+PWD_S3_BUCKET=pwd
+PWD_S3_ACCESS_KEY=...
+PWD_S3_SECRET_KEY=...
+# 可选：PWD_S3_REGION=us-east-1  PWD_S3_PREFIX=media/  PWD_S3_ADDRESSING=path|virtual  PWD_S3_CACHE_DAYS=7
+```
+
+新文件写入本地后在后台上传，本地只作为缓存，超过 `PWD_S3_CACHE_DAYS` 天未访问的文件会被清理，再次访问时自动从对象存储取回。作品仍经过 PWD 的登录鉴权访问，存储桶无需公开。启用前已有的文件可在「系统设置 → 数据与备份」中一键同步。启用对象存储后，完整备份 zip 只包含本地缓存中的媒体文件，媒体本身请依赖对象存储的版本或备份策略。
+
 ### 更新
 
 ```bash
@@ -124,11 +147,47 @@ location / {
 
 - 「AI 优化提示词」默认使用默认对话模型，可在「系统设置 → 默认模型」中单独指定。
 - 各家对尺寸、时长等参数支持不同，不支持的参数可通过创作页「额外请求参数」（JSON）直接透传。
-- ComfyUI 工作流请在 ComfyUI 中使用「导出 (API)」获取；参考图使用 `LoadImage` 节点并把文件名写成 `{{image}}`。
+- ComfyUI 工作流请在 ComfyUI 中使用「导出 (API)」获取。可用占位符：
+
+  | 占位符 | 说明 |
+  |---|---|
+  | `{{prompt}}` `{{negative_prompt}}` | 提示词 / 反向提示词 |
+  | `{{seed}}` `{{steps}}` `{{width}}` `{{height}}` `{{batch_size}}` | 数值参数（整个字段写成占位符时会替换为数字） |
+  | `{{image}}` | 参考图 / 待编辑图，配合 `LoadImage` 节点。局部重绘与扩图时重绘区域为**透明**，`LoadImage` 的 MASK 输出即为蒙版 |
+  | `{{mask}}` | 白色 = 重绘区域的蒙版图，配合 `LoadImageMask` 节点（通道选 red） |
+  | `{{scale}}` | 放大倍数；放大时 `{{width}}` `{{height}}` 为目标尺寸 |
+
+  「示例工作流」中提供了 SDXL 文生图、局部重绘、4x 放大三个模板，改成你本地已有的模型文件名即可使用。去除背景可接入 RMBG / BiRefNet 等自定义节点，工作流中用 `{{image}}` 作为输入。
+- 局部重绘 / 扩图 / 去背景使用 OpenAI 兼容接口时调用 `/images/edits`（需模型支持，如 gpt-image-1）；在模型服务中把「图生图方式」设为请求体传图时，会以 `image` 与 `mask` 字段传入 data URI。
+
+## 知识库、联网搜索与工具
+
+- **知识库**：在「模型服务」中添加向量模型（如 OpenAI `text-embedding-3-small`、硅基流动 `BAAI/bge-m3`）后，新建知识库时选择它即可使用语义检索；不选择时使用关键词检索。已有文档的知识库不能更换向量模型。
+- **联网搜索**：在「系统设置 → 搜索与工具」中选择搜索引擎。SearXNG 可自建（需在其 `settings.yml` 的 `search.formats` 中加入 `json`），Tavily、博查需要填写 API Key。
+- **MCP 服务**：填写支持 Streamable HTTP 传输的 MCP 服务地址（可附带请求头用于鉴权），点「测试」可查看其提供的工具。工具调用需要模型支持 Function Calling（如 GPT-4o、DeepSeek-V3、Qwen 等）。
+- **语音输入**：在「系统设置 → 默认模型」中选择语音识别模型（如 `whisper-1`、`FunAudioLLM/SenseVoiceSmall`）后，对话输入框会出现麦克风按钮。浏览器只允许在 HTTPS 或 localhost 下使用麦克风。
+
+## 单点登录（OIDC）
+
+在「系统设置 → 登录与服务」中开启并填写 Issuer 地址、Client ID 与 Client Secret。在身份服务（Authentik、Keycloak、Logto、Casdoor、Authelia 等）中创建应用时：
+
+- 回调地址（Redirect URI）：`https://你的域名/api/auth/oidc/callback`（设置页会显示完整地址）
+- 授权方式：Authorization Code；Scopes：`openid profile email`
+- 通过反向代理访问时，建议在设置中填写「站点对外地址」，保证回调地址正确
+
+首次单点登录会按 `preferred_username`（或邮箱前缀）自动创建账号，是否需要审核沿用注册审核设置；关闭自动建号时，已有用户可在「账号安全」中绑定单点登录账号后使用。
 
 ## 从旧版本升级
 
-直接拉取新镜像并重建容器即可，**数据库会在启动时自动迁移**（只增加字段，不改动已有数据），登录状态与历史数据全部保留；旧版本的实例会自动补充内置的角色与提示词示例。
+直接拉取新镜像并重建容器即可，**数据库会在启动时自动迁移**（只增加字段，不改动已有数据），登录状态与历史数据全部保留：
+
+- 升级到 v0.8 时，服务重启不再让进行中的任务直接失败：排队中的任务会重新执行，已提交到远端的视频 / ComfyUI 任务会继续等待结果。
+- 升级到 v0.7 时，镜像内置了 FFmpeg（用于合成成片），镜像体积略有增加。
+- 升级到 v0.6 时，「模型服务」中新增「向量模型」「语音识别模型」两类，可点击「获取模型列表 → 自动分类填入」补充。
+- 升级到 v0.5 时，已有用户不属于任何用户组（不受限制），用量统计从升级后开始记录。
+- 升级到 v0.4 时，原有对话自动转换为分支结构（原来的线性对话即一条分支），无需任何操作。
+- 升级到 v0.3（多用户）时，原有的对话、作品与任务自动归属到原管理员；原管理员自建的提示词模板转为管理员私有，旧版内置示例替换为新版内置模板。
+- 新增的内置模板会自动补充，已删除的内置模板不会被加回来。
 
 ```bash
 docker compose pull && docker compose up -d
@@ -249,6 +308,10 @@ podman rm -f pwd   # 数据在 ~/pwd/data，不会丢失
 
 > 首次推送后 GHCR 包默认为私有。如需免登录拉取，请在 GitHub 仓库主页右侧 **Packages → pwd → Package settings → Change visibility** 设为 Public。
 
+## 安装到桌面 / 手机主屏幕（PWA）
+
+PWD 支持以应用形式安装：在 Chrome / Edge 地址栏点击「安装」图标，或在 iOS Safari 中「分享 → 添加到主屏幕」。安装后有独立窗口与图标，前端资源会被缓存，打开更快（接口与作品仍需联网访问服务器）。浏览器只允许在 HTTPS 或 localhost 下安装。
+
 ## 本地开发
 
 ```bash
@@ -267,22 +330,33 @@ npm run dev     # http://localhost:5173，/api 自动代理到 8080
 
 API 文档：`http://localhost:8080/api/docs`
 
+端到端测试（Playwright，使用 `e2e/mock_server.py` 模拟全部模型服务，CI 中自动运行）：
+
+```bash
+cd frontend && npm run build && cd ../e2e
+npm ci && npx playwright install chromium
+npx playwright test          # 自动启动模拟服务与 PWD（临时数据目录）
+```
+
 ## 技术栈与目录
 
-- 后端：FastAPI + SQLAlchemy + SQLite + httpx + Pillow（`backend/`）
+- 后端：FastAPI + SQLAlchemy + SQLite + httpx + Pillow + NumPy（向量检索）+ pypdf + FFmpeg（`backend/`）
 - 前端：Vue 3 + Vite + Naive UI + lucide 图标 + marked / highlight.js（`frontend/`）
-- 单镜像：前端构建产物由后端直接托管
+- 单镜像：前端构建产物由后端直接托管；端到端测试在 `e2e/`
 
 ```
 backend/app/
-├── main.py              # 应用入口、SPA 托管
+├── main.py              # 应用入口、SPA / PWA 托管、任务恢复
 ├── migrate.py           # 启动时自动补齐数据库字段
-├── seed.py              # 内置角色与提示词示例
-├── routers/             # install / auth / providers / chat / generate / assets / prompts / system
-└── services/            # openai_compat（对话/图像/视频/语音）/ comfyui / tasks（后台任务）/ media（缩略图）
+├── seed.py, seed_data/  # 内置模板（对话角色 / 图像 / 视频提示词各 100 个）
+├── routers/             # install / auth（含两步验证、OIDC）/ users / admin（用户组、用量、日志）/ providers
+│                        # chat / generate / assets / prompts / knowledge / projects / system
+└── services/            # openai_compat / comfyui / tasks（后台任务）/ media / storage（S3）/ imageops（蒙版）
+                         # policy（权限与配额）/ failover / knowledge / documents / websearch / mcp / tools
+                         # storyboard（AI 编剧）/ render（FFmpeg 合成）/ oidc / audit
 frontend/src/
-├── views/               # 工作台、对话、图像 / 视频 / 语音工作台、作品库、提示词与角色、模型服务、设置
-├── components/          # 任务流、任务中心、作品查看器、参考图选择、模型选择、提示词输入等
+├── views/               # 工作台、对话、图像 / 视频 / 语音、短片项目、作品库、知识库、提示词、模型服务、用户、设置
+├── components/          # 图像编辑器、任务流、任务中心、作品查看器、模板选择、模型选择、管理后台组件等
 └── composables/         # 主题、工作台通用逻辑
 ```
 
@@ -292,13 +366,17 @@ frontend/src/
 - [x] 图像：图生图、风格预设、AI 优化提示词
 - [x] 视频生成、语音合成
 - [x] 作品库批量管理、任务中心、一键备份
-- [ ] 局部重绘（蒙版编辑）、图像放大
-- [ ] 项目 / 分镜管理（参考 [Slate](https://github.com/coracoo/Slate) 的制作线思路）
-- [ ] 知识库 / 文件对话
-- [ ] 多用户与配额
+- [x] 局部重绘、扩图、放大、去背景
+- [x] 对话分支、多模型对比、作品集、提示词变量
+- [x] 短片项目：剧本 → 角色与场景 → 分镜 → 关键帧 / 视频 / 配音 → 合成成片
+- [x] 工程：任务重启恢复、S3 对象存储、PWA、端到端测试接入 CI
+- [x] 知识库 / 文档对话、联网搜索、工具调用与 MCP、语音输入
+- [x] 多用户与管理员、注册审核
+- [x] 用户组、模型权限与用量配额、故障切换、两步验证、单点登录、操作日志
 
 ## 参考
 
 - [coracoo/Slate](https://github.com/coracoo/Slate)：面向短片制作的本地 AIGC 工作台
 - [LobeChat](https://github.com/lobehub/lobe-chat)、[Open WebUI](https://github.com/open-webui/open-webui)：对话体验
 - [Fooocus](https://github.com/lllyasviel/Fooocus)、[InvokeAI](https://github.com/invoke-ai/InvokeAI)：生图工作台与风格预设
+- 内置模板的分类与写法参考了 [awesome-chatgpt-prompts-zh](https://github.com/PlexPt/awesome-chatgpt-prompts-zh)、[wonderful-prompts](https://github.com/langgptai/wonderful-prompts)、[awesome-video-prompts](https://github.com/songguoxs/awesome-video-prompts)、[awesome-ai-video-prompts](https://github.com/geekjourneyx/awesome-ai-video-prompts)、[awesome-nano-banana-pro-prompts](https://github.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts)，模板内容为原创编写

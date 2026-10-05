@@ -18,7 +18,9 @@ ProgressCallback = Callable[[int, str], Awaitable[None]]
 
 
 class ProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status  # 上游 HTTP 状态码，用于判断是否可切换到备用服务
 
 
 def _base(provider: Provider) -> str:
@@ -48,7 +50,7 @@ def _error_text(resp: httpx.Response) -> str:
 
 def _raise(resp: httpx.Response, action: str) -> None:
     if resp.status_code >= 400:
-        raise ProviderError(f"{action}失败（HTTP {resp.status_code}）：{_error_text(resp)}")
+        raise ProviderError(f"{action}失败（HTTP {resp.status_code}）：{_error_text(resp)}", resp.status_code)
 
 
 # ---------------------------------------------------------------- 模型列表
@@ -79,49 +81,80 @@ async def chat_stream(
     model: str,
     messages: list[dict[str, Any]],
     params: dict[str, Any] | None = None,
-) -> AsyncIterator[tuple[str, str]]:
-    """逐段产出 (类型, 文本)，类型为 content（回复）或 reasoning（思考过程）。"""
+    tools: list[dict[str, Any]] | None = None,
+) -> AsyncIterator[tuple[str, Any]]:
+    """逐段产出 (类型, 内容)：content（回复）/ reasoning（思考过程）/ usage（Token 用量字典，可能没有）
+    / tool_calls（模型请求调用的工具列表，流结束时产出一次）。"""
     body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if tools:
+        body["tools"] = tools
     for key in ("temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"):
         if params and params.get(key) is not None:
             body[key] = params[key]
+    # 请求在流末尾返回用量；个别服务不认识该参数时自动去掉重试
+    if (provider.extra or {}).get("stream_usage", True):
+        body["stream_options"] = {"include_usage": True}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        async with client.stream(
-            "POST", f"{_base(provider)}/chat/completions", headers=_headers(provider), json=body
-        ) as resp:
-            if resp.status_code >= 400:
-                await resp.aread()
-                _raise(resp, "对话请求")
-            if "text/event-stream" not in resp.headers.get("content-type", ""):
-                # 部分服务忽略 stream 参数，直接返回完整 JSON
-                await resp.aread()
-                msg = (resp.json().get("choices") or [{}])[0].get("message", {})
-                if msg.get("reasoning_content"):
-                    yield "reasoning", msg["reasoning_content"]
-                if msg.get("content"):
-                    yield "content", msg["content"]
+        for attempt in range(2):
+            async with client.stream(
+                "POST", f"{_base(provider)}/chat/completions", headers=_headers(provider), json=body
+            ) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    if attempt == 0 and resp.status_code in (400, 422) and "stream_options" in body and "stream" in resp.text.lower():
+                        body.pop("stream_options")
+                        continue
+                    _raise(resp, "对话请求")
+                if "text/event-stream" not in resp.headers.get("content-type", ""):
+                    # 部分服务忽略 stream 参数，直接返回完整 JSON
+                    await resp.aread()
+                    data = resp.json()
+                    msg = (data.get("choices") or [{}])[0].get("message", {})
+                    if msg.get("reasoning_content"):
+                        yield "reasoning", msg["reasoning_content"]
+                    if msg.get("content"):
+                        yield "content", msg["content"]
+                    if msg.get("tool_calls"):
+                        yield "tool_calls", msg["tool_calls"]
+                    if isinstance(data.get("usage"), dict):
+                        yield "usage", data["usage"]
+                    return
+                calls: dict[int, dict[str, Any]] = {}
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    if chunk.get("error"):
+                        err = chunk["error"]
+                        raise ProviderError(err.get("message") if isinstance(err, dict) else str(err))
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                        if reasoning:
+                            yield "reasoning", reasoning
+                        if delta.get("content"):
+                            yield "content", delta["content"]
+                        for tc in delta.get("tool_calls") or []:
+                            slot = calls.setdefault(int(tc.get("index") or 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                slot["function"]["arguments"] += fn["arguments"]
+                    if isinstance(chunk.get("usage"), dict) and chunk["usage"]:
+                        yield "usage", chunk["usage"]
+                if calls:
+                    yield "tool_calls", [calls[k] for k in sorted(calls) if calls[k]["function"]["name"]]
                 return
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except ValueError:
-                    continue
-                if chunk.get("error"):
-                    err = chunk["error"]
-                    raise ProviderError(err.get("message") if isinstance(err, dict) else str(err))
-                for choice in chunk.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    if reasoning:
-                        yield "reasoning", reasoning
-                    if delta.get("content"):
-                        yield "content", delta["content"]
 
 
 async def chat_complete(provider: Provider, model: str, messages: list[dict[str, Any]], **params: Any) -> str:
@@ -130,6 +163,53 @@ async def chat_complete(provider: Provider, model: str, messages: list[dict[str,
         if kind == "content":
             parts.append(text)
     return "".join(parts).strip()
+
+
+async def chat_complete_usage(
+    provider: Provider, model: str, messages: list[dict[str, Any]], **params: Any
+) -> tuple[str, dict[str, Any] | None]:
+    """同 chat_complete，额外返回服务端报告的 Token 用量（没有时为 None）。"""
+    parts: list[str] = []
+    usage = None
+    async for kind, value in chat_stream(provider, model, messages, params):
+        if kind == "content":
+            parts.append(value)
+        elif kind == "usage":
+            usage = value
+    return "".join(parts).strip(), usage
+
+
+# ---------------------------------------------------------------- 向量与语音识别
+
+
+async def embeddings(provider: Provider, model: str, texts: list[str], batch: int = 32) -> list[list[float]]:
+    out: list[list[float]] = []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for i in range(0, len(texts), batch):
+            part = texts[i:i + batch]
+            resp = await client.post(f"{_base(provider)}/embeddings", headers=_headers(provider), json={"model": model, "input": part})
+            _raise(resp, "向量化")
+            items = sorted(resp.json().get("data") or [], key=lambda d: d.get("index", 0))
+            if len(items) != len(part):
+                raise ProviderError("向量化结果数量与输入不一致")
+            out.extend(item["embedding"] for item in items)
+    return out
+
+
+async def transcribe(provider: Provider, model: str, data: bytes, filename: str, mime: str, language: str | None = None) -> str:
+    form = {"model": model}
+    if language:
+        form["language"] = language
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base(provider)}/audio/transcriptions", headers=_headers(provider, json_body=False), data=form,
+            files={"file": (filename, data, mime)},
+        )
+    _raise(resp, "语音识别")
+    try:
+        return str(resp.json().get("text", "")).strip()
+    except ValueError:
+        return resp.text.strip()
 
 
 # ---------------------------------------------------------------- 图像
@@ -213,6 +293,49 @@ async def generate_images(
         return await _collect_images(client, resp.json())
 
 
+async def edit_image(
+    provider: Provider,
+    model: str,
+    prompt: str,
+    params: dict[str, Any],
+    image: bytes,
+    mask: bytes | None = None,
+    mask_white: bytes | None = None,
+) -> list[tuple[bytes, str]]:
+    """局部重绘 / 扩图 / 指令编辑。
+
+    edits 模式：POST /images/edits，multipart 携带 image 与 mask（透明处为重绘区域）；
+    field 模式：POST /images/generations，image / mask 以 data URI 放进请求体（mask 为白色=重绘区域）。
+    """
+    from .media import to_data_uri
+
+    body = _image_body(model, prompt, params)
+    body.pop("size", None)  # 编辑结果与原图尺寸一致，由服务决定
+    extra_body = params.get("extra_body")
+    mode = (provider.extra or {}).get("image_edit_mode") or "edits"
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        if mode == "edits":
+            form = {k: str(v) for k, v in body.items()}
+            if isinstance(extra_body, dict):
+                form.update({k: v if isinstance(v, str) else json.dumps(v) for k, v in extra_body.items()})
+            files = [("image", ("image.png", image, "image/png"))]
+            if mask:
+                files.append(("mask", ("mask.png", mask, "image/png")))
+            resp = await client.post(
+                f"{_base(provider)}/images/edits", headers=_headers(provider, json_body=False), data=form, files=files
+            )
+            _raise(resp, "图像编辑")
+        else:
+            body["image"] = to_data_uri(image, "image/png")
+            if mask_white:
+                body["mask"] = to_data_uri(mask_white, "image/png")
+            if isinstance(extra_body, dict):
+                body.update(extra_body)
+            resp = await client.post(f"{_base(provider)}/images/generations", headers=_headers(provider), json=body)
+            _raise(resp, "图像编辑")
+        return await _collect_images(client, resp.json())
+
+
 # ---------------------------------------------------------------- 语音合成
 
 
@@ -247,8 +370,9 @@ async def generate_video(
     reference: tuple[bytes, str] | None,
     on_progress: ProgressCallback,
     timeout: float = 3600,
+    resume_id: str | None = None,
 ) -> list[tuple[bytes, str]]:
-    """异步视频生成。extra.video_api 选择接口风格：
+    """异步视频生成。resume_id 为已提交的远端任务 ID 时跳过提交，直接继续轮询。extra.video_api 选择接口风格：
 
       - openai：OpenAI Sora 风格 POST /videos → GET /videos/{id} → GET /videos/{id}/content
       - siliconflow：POST /video/submit → POST /video/status
@@ -257,11 +381,13 @@ async def generate_video(
     deadline = time.monotonic() + timeout
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         if api == "siliconflow":
-            return await _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline)
-        return await _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline)
+            return await _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
+        return await _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
 
 
-async def _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline):
+async def _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id=None):
+    if resume_id:
+        return await _poll_openai_video(client, provider, resume_id, on_progress, deadline)
     form: dict[str, str] = {"model": model, "prompt": prompt}
     if params.get("size"):
         form["size"] = str(params["size"])
@@ -279,6 +405,10 @@ async def _video_openai(client, provider, model, prompt, params, reference, on_p
     if not job_id:
         raise ProviderError(f"服务未返回任务 ID：{str(job)[:300]}")
     await on_progress(int(job.get("progress") or 0), job_id)
+    return await _poll_openai_video(client, provider, job_id, on_progress, deadline)
+
+
+async def _poll_openai_video(client, provider, job_id, on_progress, deadline):
     while time.monotonic() < deadline:
         await asyncio.sleep(5)
         r = await client.get(f"{_base(provider)}/videos/{job_id}", headers=_headers(provider))
@@ -296,7 +426,9 @@ async def _video_openai(client, provider, model, prompt, params, reference, on_p
     raise ProviderError("等待视频生成超时")
 
 
-async def _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline):
+async def _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id=None):
+    if resume_id:
+        return await _poll_siliconflow_video(client, provider, resume_id, on_progress, deadline)
     body: dict[str, Any] = {"model": model, "prompt": prompt}
     if params.get("size"):
         body["image_size"] = params["size"]
@@ -316,6 +448,10 @@ async def _video_siliconflow(client, provider, model, prompt, params, reference,
     if not request_id:
         raise ProviderError(f"服务未返回任务 ID：{resp.text[:300]}")
     await on_progress(0, request_id)
+    return await _poll_siliconflow_video(client, provider, request_id, on_progress, deadline)
+
+
+async def _poll_siliconflow_video(client, provider, request_id, on_progress, deadline):
     started = time.monotonic()
     while time.monotonic() < deadline:
         await asyncio.sleep(5)

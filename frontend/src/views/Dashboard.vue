@@ -19,8 +19,17 @@
     </section>
 
     <n-alert v-if="stats && stats.providers === 0" type="warning" :bordered="false" class="setup" title="还差一步">
-      还没有配置模型服务。添加一个 OpenAI 兼容接口或 ComfyUI 后就可以开始创作了。
-      <template #action><n-button size="small" type="primary" @click="$router.push('/providers')">添加模型服务</n-button></template>
+      <div class="alert-row">
+        <span v-if="store.user?.is_admin">还没有配置模型服务。添加一个 OpenAI 兼容接口或 ComfyUI 后就可以开始创作了。</span>
+        <span v-else>管理员还没有配置可用的模型服务，请联系管理员。</span>
+        <n-button v-if="store.user?.is_admin" size="small" type="primary" @click="$router.push('/providers')">添加模型服务</n-button>
+      </div>
+    </n-alert>
+    <n-alert v-if="stats?.site?.pending_users" type="info" :bordered="false" class="setup" :title="`有 ${stats.site.pending_users} 个新用户等待审核`">
+      <div class="alert-row">
+        <span>新注册的用户需要通过审核后才能登录。</span>
+        <n-button size="small" type="primary" @click="$router.push('/users')">去审核</n-button>
+      </div>
     </n-alert>
 
     <section class="tools">
@@ -165,6 +174,7 @@ onMounted(async () => {
 .quick-box:focus-within { border-color: var(--primary); }
 .quick-box :deep(.n-input) { background: transparent; }
 .setup { border-radius: 12px; }
+.alert-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
 .tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .tool { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border); color: var(--text); transition: all .15s; }
 .tool:hover { border-color: var(--c); transform: translateY(-2px); box-shadow: var(--shadow); }

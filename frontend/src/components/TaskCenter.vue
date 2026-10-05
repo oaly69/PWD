@@ -32,15 +32,15 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NBadge, NButton, NPopover, NProgress, NTag } from 'naive-ui'
-import { AudioLines, Film, Image as ImageIcon, ListTodo, X } from 'lucide-vue-next'
+import { AudioLines, Clapperboard, Film, Image as ImageIcon, ListTodo, X } from 'lucide-vue-next'
 import { api, ui } from '../api'
 import { store } from '../store'
 import { STATUS_TEXT, STATUS_TYPE } from '../constants'
 import { relativeTime } from '../utils/format'
 
-const ICON = { image: ImageIcon, video: Film, tts: AudioLines }
-const ROUTE = { image: '/image', video: '/video', tts: '/speech' }
-const LABEL = { image: '图像', video: '视频', tts: '语音' }
+const ICON = { image: ImageIcon, video: Film, tts: AudioLines, render: Clapperboard }
+const ROUTE = { image: '/image', video: '/video', tts: '/speech', render: '/projects' }
+const LABEL = { image: '图像', video: '视频', tts: '语音', render: '成片' }
 const router = useRouter()
 const recent = ref([])
 let timer = null
@@ -53,6 +53,7 @@ const list = computed(() => {
 })
 
 function go(t) {
+  if (t.params?.project_id) return router.push(`/projects/${t.params.project_id}`)
   router.push(ROUTE[t.kind])
 }
 

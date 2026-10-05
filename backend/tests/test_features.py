@@ -50,18 +50,19 @@ def test_comfyui_workflow_kinds(installed):
         "name": "C", "kind": "comfyui", "base_url": "http://c:8188",
         "extra": {"workflows": workflows, "workflow_kinds": {"视频": "video"}},
     }).json()
-    assert p["image_models"] == ["SDXL 文生图"]
+    assert p["image_models"] == ["SDXL 文生图", "SDXL 局部重绘", "4x 高清放大"]
     assert p["video_models"] == ["视频"]
 
 
 def test_classify_models():
-    out = classify_models(["gpt-4o", "gpt-image-1", "sora-2", "tts-1", "text-embedding-3-small",
+    out = classify_models(["gpt-4o", "gpt-image-1", "sora-2", "tts-1", "text-embedding-3-small", "whisper-1", "BAAI/bge-reranker-v2-m3",
                            "Qwen/Qwen2.5-VL-72B-Instruct", "Kwai-Kolors/Kolors", "Wan-AI/Wan2.2-T2V-A14B"])
     assert out["chat"] == ["gpt-4o", "Qwen/Qwen2.5-VL-72B-Instruct"]
     assert out["image"] == ["gpt-image-1", "Kwai-Kolors/Kolors"]
     assert out["video"] == ["sora-2", "Wan-AI/Wan2.2-T2V-A14B"]
     assert out["tts"] == ["tts-1"]
-    assert out["other"] == ["text-embedding-3-small"]
+    assert out["embedding"] == ["text-embedding-3-small"] and out["stt"] == ["whisper-1"]
+    assert out["other"] == ["BAAI/bge-reranker-v2-m3"]
 
 
 def test_fill_workflow():
@@ -95,10 +96,11 @@ def test_chat_stream_with_reasoning(installed, monkeypatch):
     reply = detail["messages"][1]
     assert reply["content"] == "你好！" and reply["reasoning"] == "先想想" and reply["model"] == "chat-model"
     assert detail["title"] == "你好"
-    # 重新生成会替换最后一条助手回复
+    # 重新生成会产生新的回答分支，当前路径仍是两条消息
     r = c.post(f"/api/conversations/{conv['id']}/messages", json={"regenerate": True})
     assert '"done": true' in r.text
-    assert len(c.get(f"/api/conversations/{conv['id']}").json()["messages"]) == 2
+    msgs = c.get(f"/api/conversations/{conv['id']}").json()["messages"]
+    assert len(msgs) == 2 and len(msgs[1]["siblings"]) == 2
 
 
 def test_chat_multimodal_edit_export_search(installed, monkeypatch):
@@ -142,11 +144,12 @@ def test_chat_multimodal_edit_export_search(installed, monkeypatch):
 def test_prompt_enhance(installed, monkeypatch):
     async def fake_complete(provider, model, messages, **params):
         assert model == "chat-model" and "绘画" in messages[0]["content"]
-        return "<think>嗯</think>一只橘猫，午后阳光，胶片质感"
+        return "<think>嗯</think>一只橘猫，午后阳光，胶片质感", {"prompt_tokens": 50, "completion_tokens": 20}
 
-    monkeypatch.setattr(openai_compat, "chat_complete", fake_complete)
+    monkeypatch.setattr(openai_compat, "chat_complete_usage", fake_complete)
     r = installed.post("/api/prompts/enhance", json={"prompt": "橘猫", "kind": "image"})
     assert r.json()["prompt"] == "一只橘猫，午后阳光，胶片质感"
+    assert installed.get("/api/usage/me").json()["usage"]["tokens_month"] == 70
 
 
 # ------------------------------------------------------------------ 生成任务
@@ -270,7 +273,8 @@ def test_upload_and_media_traversal(installed):
 def test_prompts_seeded_and_crud(installed):
     c = installed
     roles = c.get("/api/prompts", params={"category": "chat"}).json()
-    assert len(roles) >= 3 and all(r["icon"] for r in roles)
+    assert len(roles) == 100 and all(r["icon"] and r["shared"] and r["builtin"] for r in roles)
+    assert len(c.get("/api/prompts", params={"category": "video"}).json()) == 100
     p = c.post("/api/prompts", json={"title": "赛博", "content": "cyberpunk", "icon": "🌃"}).json()
     assert p["icon"] == "🌃"
     assert c.put(f"/api/prompts/{p['id']}", json={"title": "新", "content": "x"}).json()["title"] == "新"
@@ -297,7 +301,12 @@ def test_migration_adds_columns_to_v01_database(tmp_path, monkeypatch):
         CREATE TABLE providers (id INTEGER PRIMARY KEY, name VARCHAR(64), kind VARCHAR(32), base_url VARCHAR(512),
             api_key TEXT, enabled BOOLEAN, chat_models JSON, image_models JSON, extra JSON, created_at DATETIME);
         INSERT INTO providers VALUES (1, 'old', 'openai', 'http://x/v1', '', 1, '["c"]', '["i"]', '{}', '2026-01-01 00:00:00');
+        CREATE TABLE conversations (id INTEGER PRIMARY KEY, title VARCHAR(255), provider_id INTEGER, model VARCHAR(255),
+            system_prompt TEXT, created_at DATETIME, updated_at DATETIME);
+        INSERT INTO conversations VALUES (1, 'old', 1, 'c', '', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
         CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER, role VARCHAR(16), content TEXT, created_at DATETIME);
+        INSERT INTO messages VALUES (1, 1, 'user', 'q1', '2026-01-01 00:00:00'), (2, 1, 'assistant', 'a1', '2026-01-01 00:00:00'),
+            (3, 1, 'user', 'q2', '2026-01-01 00:00:00');
     """)
     conn.close()
     monkeypatch.setattr(settings, "data_dir", tmp_path)
@@ -309,6 +318,12 @@ def test_migration_adds_columns_to_v01_database(tmp_path, monkeypatch):
     with db.new_session() as s:
         p = s.get(Provider, 1)
         assert p.video_models == [] and p.chat_models == ["c"]
+    rows = sqlite3.connect(path).execute("SELECT id, parent_id FROM messages ORDER BY id").fetchall()
+    assert rows == [(1, None), (2, 1), (3, 2)]
+    assert sqlite3.connect(path).execute("SELECT current_leaf_id FROM conversations").fetchone() == (3,)
+    # 再次启动不会重复回填
+    db.init_engine(f"sqlite:///{path}")
+    assert sqlite3.connect(path).execute("SELECT id, parent_id FROM messages ORDER BY id").fetchall() == rows
 
 
 def test_provider_test_draft_uses_saved_key(installed, monkeypatch):
@@ -326,7 +341,19 @@ def test_provider_test_draft_uses_saved_key(installed, monkeypatch):
     assert seen["key"] == "new"
 
 
-def test_upgraded_instance_gets_builtin_prompts_once(installed):
+def test_builtin_templates_seeded():
+    from app.seed import builtin_templates
+
+    data = builtin_templates()
+    for category in ("chat", "image", "video"):
+        items = data[category]
+        assert len(items) >= 100
+        assert len({i["title"] for i in items}) == len(items)
+        assert all(i["content"] and i["group"] and i["icon"] for i in items)
+
+
+def test_upgrade_from_v02_prompts(installed):
+    """模拟 v0.2：内置示例与用户自建模板都没有归属，升级后示例被替换、自建模板归管理员私有。"""
     from app import db
     from app.models import PromptTemplate
     from app.seed import seed_if_upgraded
@@ -334,10 +361,16 @@ def test_upgraded_instance_gets_builtin_prompts_once(installed):
 
     with db.new_session() as s:
         s.query(PromptTemplate).delete()
-        set_setting(s, "builtin_seeded", False)
+        s.add(PromptTemplate(title="分镜编剧", category="chat", content="旧内容"))
+        s.add(PromptTemplate(title="我的私藏", category="image", content="自己写的"))
+        set_setting(s, "builtin_seed_version", 0)
         s.commit()
         seed_if_upgraded(s)
+        mine = s.query(PromptTemplate).filter_by(title="我的私藏").one()
+        assert mine.user_id == 1
+        storyboard = s.query(PromptTemplate).filter_by(title="分镜编剧").all()
+        assert len(storyboard) == 1 and storyboard[0].builtin and storyboard[0].content != "旧内容"
         n = s.query(PromptTemplate).count()
-        assert n >= 10
-        seed_if_upgraded(s)
+        assert n == 301
+        seed_if_upgraded(s)  # 再次执行不会重复添加
         assert s.query(PromptTemplate).count() == n

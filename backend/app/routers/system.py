@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,9 +15,10 @@ from sqlalchemy.orm import Session
 from ..config import VERSION, settings
 from .. import db as dbmod
 from ..db import get_db
-from ..deps import current_user
-from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, utcnow
-from ..site import EDITABLE_KEYS, PUBLIC_KEYS, all_settings, set_setting
+from ..deps import current_user, require_admin
+from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User, utcnow
+from ..site import ADMIN_KEYS, EDITABLE_KEYS, PUBLIC_KEYS, SECRET_KEYS, all_settings, set_setting
+from ..services.audit import audit
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -33,24 +34,38 @@ def site_info(db: Session = Depends(get_db)):
     return {k: data[k] for k in PUBLIC_KEYS} | {"version": VERSION}
 
 
-@router.get("/settings", dependencies=[Depends(current_user)])
-def get_settings(db: Session = Depends(get_db)):
+def _settings_out(db: Session, admin: bool = True) -> dict[str, Any]:
     data = all_settings(db)
-    return {k: v for k, v in data.items() if k in EDITABLE_KEYS}
+    out = {k: v for k, v in data.items() if k in EDITABLE_KEYS and k not in SECRET_KEYS and (admin or k not in ADMIN_KEYS)}
+    if admin:
+        for k in SECRET_KEYS:
+            out[f"{k}_set"] = bool(data.get(k))
+    from ..services import websearch
+
+    out["search_available"] = websearch.configured(db)
+    out["stt_available"] = bool(data.get("stt_provider_id") and data.get("stt_model"))
+    return out
 
 
-@router.put("/settings", dependencies=[Depends(current_user)])
-def update_settings(body: dict[str, Any], db: Session = Depends(get_db)):
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _settings_out(db, user.is_admin)
+
+
+@router.put("/settings")
+def update_settings(body: dict[str, Any], request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     unknown = set(body) - EDITABLE_KEYS
     if unknown:
         raise HTTPException(status_code=422, detail=f"不支持的设置项：{', '.join(sorted(unknown))}")
     if "site_name" in body and not str(body["site_name"] or "").strip():
         raise HTTPException(status_code=422, detail="站点名称不能为空")
     for key, value in body.items():
+        if key in SECRET_KEYS and not value:
+            continue  # 留空表示保持不变
         set_setting(db, key, value)
+    audit(db, user, "settings.update", detail=", ".join(sorted(body)), request=request)
     db.commit()
-    data = all_settings(db)
-    return {k: v for k, v in data.items() if k in EDITABLE_KEYS}
+    return _settings_out(db)
 
 
 def _dir_size(path) -> int:
@@ -64,13 +79,15 @@ def _dir_size(path) -> int:
     return total
 
 
-@router.get("/stats", dependencies=[Depends(current_user)])
-def stats(db: Session = Depends(get_db)):
-    by_kind = dict(db.query(Asset.kind, func.count(Asset.id)).group_by(Asset.kind).all())
+@router.get("/stats")
+def stats(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """当前用户的统计；管理员额外返回全站概况（site）。"""
+    mine = Asset.user_id == user.id
+    by_kind = dict(db.query(Asset.kind, func.count(Asset.id)).filter(mine).group_by(Asset.kind).all())
     since = utcnow() - timedelta(days=13)
     daily_rows = (
         db.query(func.date(Asset.created_at), func.count(Asset.id))
-        .filter(Asset.created_at >= since, Asset.source == "generated")
+        .filter(mine, Asset.created_at >= since, Asset.source == "generated")
         .group_by(func.date(Asset.created_at))
         .all()
     )
@@ -80,26 +97,59 @@ def stats(db: Session = Depends(get_db)):
         {"date": (today - timedelta(days=i)).isoformat(), "count": daily_map.get((today - timedelta(days=i)).isoformat(), 0)}
         for i in range(13, -1, -1)
     ]
-    return {
-        "providers": db.query(Provider).count(),
-        "conversations": db.query(Conversation).count(),
-        "messages": db.query(Message).count(),
-        "assets": db.query(Asset).count(),
+    data = {
+        "providers": db.query(Provider).filter(Provider.enabled.is_(True)).count(),
+        "conversations": db.query(Conversation).filter(Conversation.user_id == user.id).count(),
+        "assets": db.query(Asset).filter(mine).count(),
         "images": by_kind.get("image", 0),
         "videos": by_kind.get("video", 0),
         "audios": by_kind.get("audio", 0),
-        "favorites": db.query(Asset).filter(Asset.favorite.is_(True)).count(),
-        "prompts": db.query(PromptTemplate).count(),
-        "tasks_running": db.query(Task).filter(Task.status.in_(["pending", "running"])).count(),
-        "tasks_failed": db.query(Task).filter(Task.status == "failed").count(),
-        "storage_bytes": _dir_size(settings.media_dir),
+        "favorites": db.query(Asset).filter(mine, Asset.favorite.is_(True)).count(),
+        "prompts": db.query(PromptTemplate).filter(PromptTemplate.user_id == user.id).count(),
+        "tasks_running": db.query(Task).filter(Task.user_id == user.id, Task.status.in_(["pending", "running"])).count(),
+        "tasks_failed": db.query(Task).filter(Task.user_id == user.id, Task.status == "failed").count(),
+        "storage_bytes": db.query(func.coalesce(func.sum(Asset.size), 0)).filter(mine).scalar(),
         "daily": daily,
     }
+    if user.is_admin:
+        data["site"] = {
+            "users": db.query(User).count(),
+            "pending_users": db.query(User).filter(User.status == "pending").count(),
+            "assets": db.query(Asset).count(),
+            "messages": db.query(Message).count(),
+            "storage_bytes": _dir_size(settings.media_dir),
+        }
+    return data
 
 
-@router.get("/system/backup", dependencies=[Depends(current_user)])
-def backup(background: BackgroundTasks, include_media: bool = True):
+@router.get("/system/storage", dependencies=[Depends(require_admin)])
+def storage_status():
+    from ..services import storage
+
+    return storage.status()
+
+
+@router.post("/system/storage/sync")
+async def storage_sync(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """把本地已有的媒体文件同步到对象存储（启用对象存储前的存量数据）。"""
+    import asyncio
+
+    from ..services import storage
+
+    if not storage.enabled():
+        raise HTTPException(status_code=400, detail="未配置对象存储（PWD_S3_* 环境变量）")
+    result = await asyncio.to_thread(storage.sync_all)
+    audit(db, user, "system.storage_sync", detail=str(result), request=request)
+    db.commit()
+    return result
+
+
+@router.get("/system/backup")
+def backup(background: BackgroundTasks, request: Request, include_media: bool = True,
+           db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """导出完整备份：数据库快照 + 会话密钥 +（可选）全部媒体文件。"""
+    audit(db, user, "system.backup", detail="含媒体文件" if include_media else "仅数据库", request=request)
+    db.commit()
     tmpdir = tempfile.mkdtemp(prefix="pwd-backup-")
     db_copy = os.path.join(tmpdir, "pwd.db")
     src = sqlite3.connect(dbmod.engine.url.database or str(settings.db_path))
