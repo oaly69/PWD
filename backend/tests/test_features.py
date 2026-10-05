@@ -50,7 +50,7 @@ def test_comfyui_workflow_kinds(installed):
         "name": "C", "kind": "comfyui", "base_url": "http://c:8188",
         "extra": {"workflows": workflows, "workflow_kinds": {"视频": "video"}},
     }).json()
-    assert p["image_models"] == ["SDXL 文生图"]
+    assert p["image_models"] == ["SDXL 文生图", "SDXL 局部重绘", "4x 高清放大"]
     assert p["video_models"] == ["视频"]
 
 
@@ -95,10 +95,11 @@ def test_chat_stream_with_reasoning(installed, monkeypatch):
     reply = detail["messages"][1]
     assert reply["content"] == "你好！" and reply["reasoning"] == "先想想" and reply["model"] == "chat-model"
     assert detail["title"] == "你好"
-    # 重新生成会替换最后一条助手回复
+    # 重新生成会产生新的回答分支，当前路径仍是两条消息
     r = c.post(f"/api/conversations/{conv['id']}/messages", json={"regenerate": True})
     assert '"done": true' in r.text
-    assert len(c.get(f"/api/conversations/{conv['id']}").json()["messages"]) == 2
+    msgs = c.get(f"/api/conversations/{conv['id']}").json()["messages"]
+    assert len(msgs) == 2 and len(msgs[1]["siblings"]) == 2
 
 
 def test_chat_multimodal_edit_export_search(installed, monkeypatch):
@@ -298,7 +299,12 @@ def test_migration_adds_columns_to_v01_database(tmp_path, monkeypatch):
         CREATE TABLE providers (id INTEGER PRIMARY KEY, name VARCHAR(64), kind VARCHAR(32), base_url VARCHAR(512),
             api_key TEXT, enabled BOOLEAN, chat_models JSON, image_models JSON, extra JSON, created_at DATETIME);
         INSERT INTO providers VALUES (1, 'old', 'openai', 'http://x/v1', '', 1, '["c"]', '["i"]', '{}', '2026-01-01 00:00:00');
+        CREATE TABLE conversations (id INTEGER PRIMARY KEY, title VARCHAR(255), provider_id INTEGER, model VARCHAR(255),
+            system_prompt TEXT, created_at DATETIME, updated_at DATETIME);
+        INSERT INTO conversations VALUES (1, 'old', 1, 'c', '', '2026-01-01 00:00:00', '2026-01-01 00:00:00');
         CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER, role VARCHAR(16), content TEXT, created_at DATETIME);
+        INSERT INTO messages VALUES (1, 1, 'user', 'q1', '2026-01-01 00:00:00'), (2, 1, 'assistant', 'a1', '2026-01-01 00:00:00'),
+            (3, 1, 'user', 'q2', '2026-01-01 00:00:00');
     """)
     conn.close()
     monkeypatch.setattr(settings, "data_dir", tmp_path)
@@ -310,6 +316,12 @@ def test_migration_adds_columns_to_v01_database(tmp_path, monkeypatch):
     with db.new_session() as s:
         p = s.get(Provider, 1)
         assert p.video_models == [] and p.chat_models == ["c"]
+    rows = sqlite3.connect(path).execute("SELECT id, parent_id FROM messages ORDER BY id").fetchall()
+    assert rows == [(1, None), (2, 1), (3, 2)]
+    assert sqlite3.connect(path).execute("SELECT current_leaf_id FROM conversations").fetchone() == (3,)
+    # 再次启动不会重复回填
+    db.init_engine(f"sqlite:///{path}")
+    assert sqlite3.connect(path).execute("SELECT id, parent_id FROM messages ORDER BY id").fetchall() == rows
 
 
 def test_provider_test_draft_uses_saved_key(installed, monkeypatch):

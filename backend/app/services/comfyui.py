@@ -3,7 +3,10 @@
 工作流存放在 provider.extra["workflows"] 中，形如 {"工作流名称": {...API JSON...}}，
 工作流名称即为模型名称（可同时用于图像与视频，取决于工作流的输出节点）。可用占位符：
   {{prompt}} {{negative_prompt}} {{seed}} {{width}} {{height}} {{steps}} {{batch_size}}
-  {{image}}  参考图（自动上传到 ComfyUI 的 input 目录后替换为文件名，配合 LoadImage 节点）
+  {{image}}  参考图 / 待编辑的图（自动上传到 ComfyUI 的 input 目录后替换为文件名，配合 LoadImage 节点）
+            局部重绘时该图的重绘区域为透明，LoadImage 的 MASK 输出即为重绘区域
+  {{mask}}   局部重绘蒙版（白色 = 重绘区域，配合 LoadImageMask 节点，通道选 red）
+  {{scale}}  放大倍数
 当某个字符串值恰好等于数字类占位符时，会被替换为数字。
 输出支持 SaveImage（images）以及 VideoHelperSuite 等节点的 gifs / videos 输出。
 """
@@ -23,7 +26,7 @@ import httpx
 from ..models import Provider
 from .openai_compat import ProviderError
 
-NUMERIC_KEYS = {"seed", "width", "height", "steps", "batch_size"}
+NUMERIC_KEYS = {"seed", "width", "height", "steps", "batch_size", "scale", "denoise"}
 
 EXAMPLE_WORKFLOW: dict[str, Any] = {
     "3": {
@@ -43,6 +46,33 @@ EXAMPLE_WORKFLOW: dict[str, Any] = {
     "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
     "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
     "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "PWD", "images": ["8", 0]}},
+}
+
+# 局部重绘 / 扩图：LoadImage 的 MASK 输出来自透明区域
+EXAMPLE_INPAINT: dict[str, Any] = {
+    "1": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+    "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"}},
+    "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["2", 1]}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["2", 1]}},
+    "5": {"class_type": "VAEEncodeForInpaint", "inputs": {"pixels": ["1", 0], "vae": ["2", 2], "mask": ["1", 1], "grow_mask_by": 8}},
+    "6": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 7, "sampler_name": "euler", "scheduler": "normal", "denoise": 1,
+            "model": ["2", 0], "positive": ["3", 0], "negative": ["4", 0], "latent_image": ["5", 0],
+        },
+    },
+    "7": {"class_type": "VAEDecode", "inputs": {"samples": ["6", 0], "vae": ["2", 2]}},
+    "8": {"class_type": "SaveImage", "inputs": {"filename_prefix": "PWD_inpaint", "images": ["7", 0]}},
+}
+
+# 模型放大：先用放大模型放大 4 倍，再缩放到目标尺寸（{{width}} x {{height}} = 原图 × 倍数）
+EXAMPLE_UPSCALE: dict[str, Any] = {
+    "1": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+    "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "4x-UltraSharp.pth"}},
+    "3": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+    "4": {"class_type": "ImageScale", "inputs": {"image": ["3", 0], "upscale_method": "lanczos", "width": "{{width}}", "height": "{{height}}", "crop": "disabled"}},
+    "5": {"class_type": "SaveImage", "inputs": {"filename_prefix": "PWD_upscale", "images": ["4", 0]}},
 }
 
 
@@ -100,29 +130,38 @@ async def generate(
     references: list[tuple[bytes, str]] | None = None,
     on_progress=None,
     timeout: float = 3600,
+    uploads: dict[str, tuple[bytes, str]] | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> list[tuple[bytes, str]]:
+    """uploads：额外需要上传的图片，键为占位符名（如 image / mask）；overrides：覆盖占位符取值。"""
     workflows = (provider.extra or {}).get("workflows") or {}
     workflow = workflows.get(model)
     if not isinstance(workflow, dict) or not workflow:
         raise ProviderError(f"未找到名为「{model}」的 ComfyUI 工作流，请在模型服务中配置")
     values = build_values(prompt, params)
+    values.update(overrides or {})
+    files_to_upload = dict(uploads or {})
+    if references and "image" not in files_to_upload:
+        files_to_upload["image"] = references[0]
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        values["image"] = ""
-        if references:
-            data, mime = references[0]
+        values.setdefault("image", "")
+        values.setdefault("mask", "")
+        for key, (data, mime) in files_to_upload.items():
             up = await client.post(
                 f"{_base(provider)}/upload/image",
-                files={"image": (f"pwd_{uuid.uuid4().hex[:8]}.png", data, mime)},
+                files={"image": (f"pwd_{key}_{uuid.uuid4().hex[:8]}.png", data, mime)},
                 data={"overwrite": "true"},
                 headers=_headers(provider),
             )
             if up.status_code >= 400:
-                raise ProviderError(f"上传参考图到 ComfyUI 失败（HTTP {up.status_code}）")
+                raise ProviderError(f"上传图片到 ComfyUI 失败（HTTP {up.status_code}）")
             info = up.json()
-            values["image"] = f"{info['subfolder']}/{info['name']}" if info.get("subfolder") else info["name"]
-        elif _uses_placeholder(workflow, "image"):
+            values[key] = f"{info['subfolder']}/{info['name']}" if info.get("subfolder") else info["name"]
+        if not values["image"] and _uses_placeholder(workflow, "image"):
             raise ProviderError("该工作流需要参考图（包含 {{image}} 占位符），请先选择参考图")
+        if not values["mask"] and _uses_placeholder(workflow, "mask"):
+            raise ProviderError("该工作流需要蒙版（包含 {{mask}} 占位符），请在局部重绘中使用")
         graph = fill_workflow(workflow, values)
         resp = await client.post(
             f"{_base(provider)}/prompt",

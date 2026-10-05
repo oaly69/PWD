@@ -213,6 +213,49 @@ async def generate_images(
         return await _collect_images(client, resp.json())
 
 
+async def edit_image(
+    provider: Provider,
+    model: str,
+    prompt: str,
+    params: dict[str, Any],
+    image: bytes,
+    mask: bytes | None = None,
+    mask_white: bytes | None = None,
+) -> list[tuple[bytes, str]]:
+    """局部重绘 / 扩图 / 指令编辑。
+
+    edits 模式：POST /images/edits，multipart 携带 image 与 mask（透明处为重绘区域）；
+    field 模式：POST /images/generations，image / mask 以 data URI 放进请求体（mask 为白色=重绘区域）。
+    """
+    from .media import to_data_uri
+
+    body = _image_body(model, prompt, params)
+    body.pop("size", None)  # 编辑结果与原图尺寸一致，由服务决定
+    extra_body = params.get("extra_body")
+    mode = (provider.extra or {}).get("image_edit_mode") or "edits"
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        if mode == "edits":
+            form = {k: str(v) for k, v in body.items()}
+            if isinstance(extra_body, dict):
+                form.update({k: v if isinstance(v, str) else json.dumps(v) for k, v in extra_body.items()})
+            files = [("image", ("image.png", image, "image/png"))]
+            if mask:
+                files.append(("mask", ("mask.png", mask, "image/png")))
+            resp = await client.post(
+                f"{_base(provider)}/images/edits", headers=_headers(provider, json_body=False), data=form, files=files
+            )
+            _raise(resp, "图像编辑")
+        else:
+            body["image"] = to_data_uri(image, "image/png")
+            if mask_white:
+                body["mask"] = to_data_uri(mask_white, "image/png")
+            if isinstance(extra_body, dict):
+                body.update(extra_body)
+            resp = await client.post(f"{_base(provider)}/images/generations", headers=_headers(provider), json=body)
+            _raise(resp, "图像编辑")
+        return await _collect_images(client, resp.json())
+
+
 # ---------------------------------------------------------------- 语音合成
 
 

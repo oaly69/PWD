@@ -79,8 +79,11 @@
             <n-select v-model:value="form.group" :options="groupOptions" filterable tag clearable placeholder="可选" />
           </n-form-item>
         </div>
-        <n-form-item :label="form.category === 'chat' ? '角色设定（系统提示词）' : '提示词'">
-          <n-input v-model:value="form.content" type="textarea" :autosize="{ minRows: 6, maxRows: 16 }" />
+        <n-form-item :label="form.category === 'chat' ? '角色设定（系统提示词）' : '提示词'" :show-feedback="false" style="margin-bottom: 18px">
+          <div style="width: 100%">
+            <n-input v-model:value="form.content" type="textarea" :autosize="{ minRows: 6, maxRows: 16 }" />
+            <div class="muted var-hint" v-pre>支持变量：写成 {{主题}} 或 {{风格|赛博朋克}}（竖线后为默认值），在创作页使用模板时会弹出表单填写。</div>
+          </div>
         </n-form-item>
         <n-form-item v-if="form.category === 'image'" label="反向提示词">
           <n-input v-model:value="form.negative" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
@@ -223,6 +226,7 @@ onMounted(load)
 .meta { display: flex; gap: 6px; align-items: center; font-size: 12px; margin-top: 2px; }
 .tag { font-size: 11px; padding: 0 6px; border-radius: 6px; background: var(--panel-2); color: var(--muted); }
 .tag.mine { background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.var-hint { font-size: 12px; margin-top: 6px; }
 .content { font-size: 13px; color: var(--text-2); line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; flex: 1; white-space: pre-wrap; }
 .neg { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .neg span { font-weight: 600; margin-right: 6px; }

@@ -67,7 +67,7 @@
             <template v-else>{{ current.icon || '🤖' }}</template>
           </div>
           <div class="msg-main">
-            <div v-if="m.role === 'assistant'" class="msg-meta">{{ m.model || current.model }}</div>
+            <div v-if="m.role === 'assistant' && !(m.alternatives?.length > 1)" class="msg-meta">{{ m.model || current.model }}</div>
             <div v-if="m.attachments?.length" class="attachments">
               <img v-for="a in m.attachments" :key="a.id" :src="a.thumb_url || a.url" @click="preview(m.attachments, a)" />
             </div>
@@ -78,7 +78,24 @@
               <div class="row edit-actions">
                 <n-button size="small" @click="editing = null">取消</n-button>
                 <n-button size="small" @click="saveEdit(m, false)">仅保存</n-button>
-                <n-button size="small" type="primary" @click="saveEdit(m, true)">保存并重新生成</n-button>
+                <n-button size="small" type="primary" @click="saveEdit(m, true)">作为新分支发送</n-button>
+              </div>
+            </div>
+
+            <!-- 多模型对比：同一问题的多个回答并排展示 -->
+            <div v-else-if="m.alternatives?.length > 1" class="compare" :style="{ '--cols': Math.min(m.alternatives.length, 4) }">
+              <div v-for="alt in m.alternatives" :key="alt.id || alt.model" class="compare-col" :class="{ chosen: !m.streaming && alt.id === m.id }">
+                <div class="compare-head">
+                  <span class="ellipsis" :title="alt.model">{{ alt.model }}</span>
+                  <span class="spacer" />
+                  <n-button v-if="!m.streaming && !alt.streaming" quaternary size="tiny" @click="copy(alt.content)"><template #icon><Copy :size="13" /></template></n-button>
+                  <n-tag v-if="!m.streaming && alt.id === m.id" size="small" type="primary" :bordered="false">当前</n-tag>
+                  <n-button v-else-if="!m.streaming && alt.id" size="tiny" secondary @click="switchBranch(alt.id)">选用</n-button>
+                </div>
+                <div v-if="reasoningOf(alt) && !bodyOf(alt)" class="muted compare-think">思考中…</div>
+                <div v-if="bodyOf(alt)" class="md" v-html="renderMarkdown(bodyOf(alt))" />
+                <div v-if="alt.streaming && !bodyOf(alt) && !reasoningOf(alt)" class="typing"><span /><span /><span /></div>
+                <div v-if="alt.error" class="msg-error"><CircleAlert :size="14" /> {{ alt.error }}</div>
               </div>
             </div>
 
@@ -97,13 +114,22 @@
               </div>
               <div v-if="m.streaming && !bodyOf(m) && !reasoningOf(m)" class="typing"><span /><span /><span /></div>
               <div v-if="m.error" class="msg-error"><CircleAlert :size="14" /> {{ m.error }}</div>
-              <div v-if="!m.streaming" class="ops">
-                <n-button quaternary size="tiny" @click="copy(m.content)"><template #icon><Copy :size="13" /></template></n-button>
-                <n-button v-if="m.role === 'user' && m.id" quaternary size="tiny" @click="startEdit(m)"><template #icon><Pencil :size="13" /></template></n-button>
-                <n-button v-if="m.role === 'assistant' && i === current.messages.length - 1 && !sending" quaternary size="tiny" @click="regenerate"><template #icon><RefreshCw :size="13" /></template></n-button>
-                <n-button v-if="m.id" quaternary size="tiny" @click="removeMsg(m)"><template #icon><Trash2 :size="13" /></template></n-button>
-              </div>
             </template>
+            <div v-if="!m.streaming && editing !== m.id" class="ops">
+              <div v-if="m.siblings?.length > 1 && !(m.alternatives?.length > 1)" class="branch-nav">
+                <button :disabled="sending || branchIndex(m) === 0" @click="switchSibling(m, -1)"><ChevronLeft :size="14" /></button>
+                <span>{{ branchIndex(m) + 1 }} / {{ m.siblings.length }}</span>
+                <button :disabled="sending || branchIndex(m) === m.siblings.length - 1" @click="switchSibling(m, 1)"><ChevronRight :size="14" /></button>
+              </div>
+              <n-button v-if="!(m.alternatives?.length > 1)" quaternary size="tiny" @click="copy(m.content)"><template #icon><Copy :size="13" /></template></n-button>
+              <n-button v-if="m.role === 'user' && m.id" quaternary size="tiny" :disabled="sending" @click="startEdit(m)"><template #icon><Pencil :size="13" /></template></n-button>
+              <n-tooltip v-if="m.role === 'assistant' && m.id"><template #trigger>
+                <n-button quaternary size="tiny" :disabled="sending" @click="regenerate(m)"><template #icon><RefreshCw :size="13" /></template></n-button>
+              </template>重新生成（保留原回答为另一个分支）</n-tooltip>
+              <n-tooltip v-if="m.id"><template #trigger>
+                <n-button quaternary size="tiny" :disabled="sending" @click="removeMsg(m)"><template #icon><Trash2 :size="13" /></template></n-button>
+              </template>删除此消息及其后续分支</n-tooltip>
+            </div>
           </div>
         </div>
         <div v-if="!current" class="welcome">
@@ -136,7 +162,23 @@
               <n-button quaternary circle size="small" :loading="uploading" @click="fileInput?.click()"><template #icon><Paperclip :size="16" /></template></n-button>
             </template>添加图片（需模型支持视觉）</n-tooltip>
             <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="(e) => { addFiles(e.target.files); e.target.value = '' }" />
-            <span class="muted model-label ellipsis">{{ modelLabel }}</span>
+            <n-popover trigger="click" placement="top-start" :show-arrow="false">
+              <template #trigger>
+                <n-button quaternary size="small" :type="compareKeys.length ? 'primary' : 'default'" class="compare-btn">
+                  <template #icon><Columns3 :size="15" /></template>{{ compareKeys.length ? `对比 ${compareKeys.length} 个模型` : '多模型对比' }}
+                </n-button>
+              </template>
+              <div class="compare-pop">
+                <div class="field-label">同时发送给多个模型（最多 4 个），回答并排对比</div>
+                <ModelSelect v-model="compareKeys" kind="chat" multiple placeholder="选择 2～4 个模型" style="width: 340px" />
+                <div class="row" style="margin-top: 8px">
+                  <span class="muted hint">对比后可在任一回答上点「选用」继续对话</span>
+                  <span class="spacer" />
+                  <n-button v-if="compareKeys.length" size="tiny" @click="compareKeys = []">关闭对比</n-button>
+                </div>
+              </div>
+            </n-popover>
+            <span class="muted model-label ellipsis">{{ compareKeys.length ? compareKeys.map((k) => splitModelKey(k)[1]).join(' · ') : modelLabel }}</span>
             <span class="spacer" />
             <n-button v-if="sending" type="error" secondary circle @click="stop"><template #icon><Square :size="14" fill="currentColor" /></template></n-button>
             <n-button v-else type="primary" circle :disabled="!input.trim() && !pending.length" @click="send"><template #icon><ArrowUp :size="18" /></template></n-button>
@@ -189,9 +231,9 @@
 <script setup>
 import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NModal, NSlider, NTooltip } from 'naive-ui'
+import { NButton, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NModal, NPopover, NSlider, NTag, NTooltip } from 'naive-ui'
 import {
-  ArrowDown, ArrowUp, Bot, Brain, ChevronDown, CircleAlert, Copy, Ellipsis, FileDown, MessageSquare, PanelLeftOpen,
+  ArrowDown, ArrowUp, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Columns3, Copy, Ellipsis, FileDown, MessageSquare, PanelLeftOpen,
   Paperclip, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, Square, Trash2, X,
 } from 'lucide-vue-next'
 import EmptyState from '../components/EmptyState.vue'
@@ -234,6 +276,7 @@ const inputRef = ref(null)
 const fileInput = ref(null)
 const viewerItems = ref([])
 const viewerIndex = ref(-1)
+const compareKeys = ref([])
 let controller = null
 let searchTimer = null
 
@@ -375,7 +418,27 @@ async function removeConv(c) {
 
 async function removeMsg(m) {
   await api.del(`/api/conversations/${current.value.id}/messages/${m.id}`)
-  current.value.messages = current.value.messages.filter((x) => x.id !== m.id)
+  await refresh()
+}
+
+async function refresh() {
+  const conv = current.value
+  const fresh = await api.get(`/api/conversations/${conv.id}`)
+  if (current.value?.id === conv.id) current.value = fresh
+  return fresh
+}
+
+const branchIndex = (m) => Math.max(0, (m.siblings || []).indexOf(m.id))
+
+async function switchBranch(messageId) {
+  const conv = current.value
+  const fresh = await api.post(`/api/conversations/${conv.id}/branch`, { message_id: messageId })
+  if (current.value?.id === conv.id) current.value = fresh
+}
+
+function switchSibling(m, step) {
+  const target = m.siblings[branchIndex(m) + step]
+  if (target) switchBranch(target)
 }
 
 function startEdit(m) {
@@ -385,14 +448,18 @@ function startEdit(m) {
 
 async function saveEdit(m, resend) {
   const conv = current.value
-  await api.patch(`/api/conversations/${conv.id}/messages/${m.id}`, { content: editText.value, truncate: resend })
+  const text = editText.value
   editing.value = null
-  m.content = editText.value
-  if (resend) {
-    const idx = conv.messages.findIndex((x) => x.id === m.id)
-    conv.messages.splice(idx + 1)
-    await stream({ regenerate: true })
+  if (!resend) {
+    await api.patch(`/api/conversations/${conv.id}/messages/${m.id}`, { content: text })
+    m.content = text
+    return
   }
+  // 编辑后发送：原消息保留为另一个分支
+  const idx = conv.messages.findIndex((x) => x.id === m.id)
+  conv.messages.splice(idx)
+  conv.messages.push({ role: 'user', content: text, attachments: m.attachments })
+  await stream({ content: text, attachments: (m.attachments || []).map((a) => a.id), parent_id: m.parent_id ?? null })
 }
 
 function toggleReasoning(key) {
@@ -448,9 +515,18 @@ function onKeydown(e) {
   }
 }
 
+function compareModels() {
+  return compareKeys.value.map((k) => {
+    const [provider_id, model] = splitModelKey(k)
+    return { provider_id, model }
+  })
+}
+
 async function stream(body) {
   const conv = current.value
-  conv.messages.push({ role: 'assistant', content: '', reasoning: '', streaming: true, model: conv.model })
+  const models = compareModels()
+  if (models.length) body.models = models
+  conv.messages.push({ role: 'assistant', content: '', reasoning: '', streaming: true, model: models.length === 1 ? models[0].model : conv.model })
   const msg = conv.messages[conv.messages.length - 1]
   sending.value = true
   atBottom.value = true
@@ -458,10 +534,17 @@ async function stream(body) {
   controller = new AbortController()
   try {
     await streamPost(`/api/conversations/${conv.id}/messages`, body, (ev) => {
-      if (ev.delta) msg.content += ev.delta
-      if (ev.reasoning) msg.reasoning += ev.reasoning
-      if (ev.message_id) msg.id = ev.message_id
-      if (ev.error) msg.error = ev.error
+      if (ev.start) {
+        if (ev.replies.length > 1) msg.alternatives = ev.replies.map((r) => ({ id: r.id, model: r.model, content: '', reasoning: '', streaming: true }))
+        else msg.id = ev.replies[0]?.id
+        return
+      }
+      const target = msg.alternatives ? msg.alternatives[ev.i] : msg
+      if (!target) return
+      if (ev.delta) target.content += ev.delta
+      if (ev.reasoning) target.reasoning += ev.reasoning
+      if (ev.error) target.error = ev.error
+      if (ev.done || ev.error) target.streaming = false
       scrollBottom()
     }, controller.signal)
   } catch (e) {
@@ -470,14 +553,14 @@ async function stream(body) {
     msg.streaming = false
     sending.value = false
     controller = null
-    const fresh = await api.get(`/api/conversations/${conv.id}`).catch(() => null)
+    const err = msg.error
+    const fresh = await refresh().catch(() => null)
     if (fresh) {
-      const err = msg.error
-      if (current.value?.id === conv.id) {
-        current.value = fresh
+      // 请求本身失败（未进入流式）时，在末尾提示错误
+      if (err && current.value?.id === conv.id) {
         const last = fresh.messages[fresh.messages.length - 1]
-        if (err && last?.role === 'assistant') last.error = err
-        else if (err) fresh.messages.push({ role: 'assistant', content: '', error: err })
+        if (last?.role === 'assistant' && !last.error) last.error = err
+        else if (last?.role !== 'assistant') fresh.messages.push({ role: 'assistant', content: '', error: err })
       }
       const item = convs.value.find((c) => c.id === conv.id)
       if (item) item.title = fresh.title
@@ -490,7 +573,7 @@ async function stream(body) {
 async function send() {
   const text = input.value.trim()
   if ((!text && !pending.value.length) || sending.value) return
-  if (!current.value.model) return toast('请先在右上角选择模型', 'warning')
+  if (!current.value.model && compareKeys.value.length < 1) return toast('请先在右上角选择模型', 'warning')
   const attachments = pending.value
   input.value = ''
   pending.value = []
@@ -498,10 +581,13 @@ async function send() {
   await stream({ content: text, attachments: attachments.map((a) => a.id) })
 }
 
-async function regenerate() {
+async function regenerate(m) {
+  // 为该回答对应的问题生成一个新的回答分支，原回答保留
   const msgs = current.value.messages
-  while (msgs.length && msgs[msgs.length - 1].role === 'assistant') msgs.pop()
-  await stream({ regenerate: true })
+  const idx = msgs.findIndex((x) => x.id === m.id)
+  if (idx < 0) return
+  msgs.splice(idx)
+  await stream({ regenerate: true, parent_id: m.parent_id })
 }
 
 function stop() {
@@ -604,6 +690,20 @@ onMounted(async () => {
 .ops { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
 .msg:hover .ops { opacity: 1; }
 .edit-box { width: min(640px, 100%); }
+.branch-nav { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); margin-right: 4px; font-variant-numeric: tabular-nums; }
+.branch-nav button { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px; border-radius: 4px; display: grid; place-items: center; }
+.branch-nav button:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.branch-nav button:disabled { opacity: .35; cursor: default; }
+.msg.assistant:has(.compare) { max-width: min(1400px, 100%); }
+.msg-main:has(.compare) { flex: 1; }
+.compare { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 10px; width: 100%; }
+.compare-col { min-width: 0; border: 1px solid var(--border); background: var(--panel); border-radius: 12px; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+.compare-col.chosen { border-color: color-mix(in srgb, var(--primary) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 25%, transparent); }
+.compare-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; min-width: 0; }
+.compare-think { font-size: 12.5px; }
+.compare-col .typing { border: none; padding: 8px 0; }
+.compare-btn { font-size: 12.5px; }
+.compare-pop { padding: 4px 2px; }
 .edit-actions { justify-content: flex-end; margin-top: 8px; }
 
 .to-bottom { position: absolute; right: 28px; bottom: 140px; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--text-2); display: grid; place-items: center; cursor: pointer; box-shadow: var(--shadow); }
@@ -632,5 +732,6 @@ onMounted(async () => {
   .messages { padding: 16px 12px 8px; }
   .composer-wrap { padding: 6px 10px 12px; }
   .ops { opacity: 1; }
+  .compare { grid-template-columns: 1fr; }
 }
 </style>

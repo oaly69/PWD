@@ -95,6 +95,81 @@ async def generate_image(body: GenerateIn, db: Session = Depends(get_db), user: 
     return task_out(_create_task(db, "image", body, user))
 
 
+class ExpandIn(BaseModel):
+    left: int = Field(0, ge=0, le=4096)
+    top: int = Field(0, ge=0, le=4096)
+    right: int = Field(0, ge=0, le=4096)
+    bottom: int = Field(0, ge=0, le=4096)
+
+
+class ImageEditIn(BaseModel):
+    op: Literal["inpaint", "outpaint", "upscale", "rembg"]
+    source_asset_id: int
+    provider_id: int | None = None  # 放大时为空表示本地放大
+    model: str | None = None
+    prompt: str = Field("", max_length=20000)
+    negative_prompt: str = ""
+    mask: str | None = Field(None, max_length=30_000_000)  # data URI，白色 = 重绘区域
+    expand: ExpandIn | None = None
+    scale: float | None = Field(None, ge=1, le=8)
+    n: int = Field(1, ge=1, le=4)
+    seed: int | None = None
+    steps: int | None = Field(None, ge=1, le=200)
+    extra_body: dict[str, Any] | None = None
+
+
+OP_LABEL = {"inpaint": "局部重绘", "outpaint": "扩图", "upscale": "高清放大", "rembg": "去除背景"}
+
+
+@router.post("/images/edit")
+async def edit_image(body: ImageEditIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """对作品进行二次编辑，结果作为新作品保存。"""
+    from ..services import imageops
+    from ..services.media import read_media, save_media
+
+    src = db.get(Asset, body.source_asset_id)
+    if src is None or src.kind != "image" or src.user_id != user.id:
+        raise HTTPException(status_code=404, detail="原图不存在")
+    local = body.op == "upscale" and not body.provider_id
+    provider = None
+    if not local:
+        provider = db.get(Provider, body.provider_id) if body.provider_id else None
+        if provider is None:
+            raise HTTPException(status_code=400, detail="请选择模型")
+        if not provider.enabled:
+            raise HTTPException(status_code=400, detail="该模型服务已停用")
+        if not body.model:
+            raise HTTPException(status_code=400, detail="请选择模型")
+    if body.op == "inpaint":
+        if not body.prompt.strip():
+            raise HTTPException(status_code=400, detail="请描述要在涂抹区域生成的内容")
+        if not body.mask:
+            raise HTTPException(status_code=400, detail="请先涂抹需要重绘的区域")
+    if body.op == "outpaint" and not (body.expand and any(body.expand.model_dump().values())):
+        raise HTTPException(status_code=400, detail="请设置扩展的方向和大小")
+
+    params = body.model_dump(exclude={"provider_id", "model", "prompt", "mask"}, exclude_none=True)
+    if body.mask:
+        try:
+            mask_bytes = imageops.decode_data_uri(body.mask)
+            size = (src.width, src.height) if src.width and src.height else imageops.image_dims(read_media(src.filename))
+            imageops.normalize_mask(mask_bytes, size)
+        except imageops.ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        params["mask_file"] = save_media(mask_bytes, "image/png")
+    if body.op == "upscale":
+        params["scale"] = body.scale or 2
+    prompt = body.prompt.strip() or (src.prompt if body.op == "outpaint" else "") or OP_LABEL[body.op]
+    task = Task(
+        user_id=user.id, kind="image", status="pending", provider_id=provider.id if provider else None,
+        model=body.model or "本地放大", prompt=prompt, params=params,
+    )
+    db.add(task)
+    db.commit()
+    task_runner.submit(task.id)
+    return task_out(task)
+
+
 @router.get("/tasks")
 def list_tasks(
     kind: str | None = None,

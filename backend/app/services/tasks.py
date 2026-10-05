@@ -6,7 +6,7 @@ import logging
 
 from ..db import new_session
 from ..models import Asset, Provider, Task, utcnow
-from . import comfyui, openai_compat
+from . import comfyui, imageops, openai_compat
 from .media import image_size, read_media, save_media
 from .openai_compat import ProviderError
 
@@ -72,9 +72,60 @@ def effective_prompt(task: Task) -> tuple[str, dict]:
     return prompt, params
 
 
-async def _execute(db, task: Task, provider: Provider) -> list[tuple[bytes, str]]:
+REMBG_PROMPT = "Remove the background completely and keep only the main subject with clean edges, transparent background."
+
+
+async def _execute_op(db, task: Task, provider: Provider | None, prompt: str, params: dict, on_progress) -> list[tuple[bytes, str]]:
+    """作品二次编辑：局部重绘 / 扩图 / 放大 / 去背景。"""
+    op = params["op"]
+    src = db.get(Asset, int(params.get("source_asset_id") or 0))
+    if src is None or src.kind != "image":
+        raise ProviderError("原图不存在或已被删除")
+    data = read_media(src.filename)
+
+    if op == "upscale":
+        scale = float(params.get("scale") or 2)
+        if provider is None:
+            return [(imageops.upscale_local(data, scale), "image/png")]
+        if provider.kind == "comfyui":
+            w, h = imageops.image_dims(data)
+            overrides = {"width": round(w * scale), "height": round(h * scale), "scale": scale}
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads={"image": (data, src.mime)}, overrides=overrides)
+        raise ProviderError("OpenAI 兼容接口没有通用的放大接口，请选择「本地放大」或 ComfyUI 放大工作流")
+
+    if provider is None:
+        raise ProviderError("模型服务不存在或已被删除")
+
+    if op == "rembg":
+        if provider.kind == "comfyui":
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads={"image": (data, src.mime)})
+        extra = dict(params.get("extra_body") or {})
+        if "gpt-image" in task.model:
+            extra.setdefault("background", "transparent")
+        return await openai_compat.edit_image(provider, task.model, prompt or REMBG_PROMPT, {**params, "extra_body": extra}, imageops.prepare_png(data))
+
+    if op in ("inpaint", "outpaint"):
+        if op == "inpaint":
+            if not params.get("mask_file"):
+                raise ProviderError("缺少蒙版")
+            base = data
+            mask = imageops.normalize_mask(read_media(params["mask_file"]), imageops.image_dims(data))
+        else:
+            e = params.get("expand") or {}
+            base, mask = imageops.outpaint_canvas(data, *(int(e.get(k) or 0) for k in ("left", "top", "right", "bottom")))
+        prep = imageops.prepare_inpaint(base, mask)
+        if provider.kind == "comfyui":
+            uploads = {"image": (prep["image_alpha"], "image/png"), "mask": (prep["mask"], "image/png")}
+            w, h = imageops.image_dims(base)
+            return await comfyui.generate(provider, task.model, prompt, params, None, on_progress, uploads=uploads, overrides={"width": w, "height": h})
+        return await openai_compat.edit_image(
+            provider, task.model, prompt, params, prep["image"], mask=prep["openai_mask"], mask_white=prep["mask"]
+        )
+    raise ProviderError(f"未知的编辑操作：{op}")
+
+
+async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[bytes, str]]:
     prompt, params = effective_prompt(task)
-    refs = _load_references(db, params.get("reference_asset_ids"))
 
     async def on_progress(progress: int, external_id: str = "") -> None:
         changed = False
@@ -87,6 +138,11 @@ async def _execute(db, task: Task, provider: Provider) -> list[tuple[bytes, str]
         if changed:
             db.commit()
 
+    if params.get("op"):
+        return await _execute_op(db, task, provider, prompt, params, on_progress)
+    if provider is None:
+        raise ProviderError("模型服务不存在或已被删除")
+    refs = _load_references(db, params.get("reference_asset_ids"))
     if provider.kind == "comfyui":
         if task.kind == "tts":
             raise ProviderError("ComfyUI 暂不支持语音合成")
@@ -112,8 +168,6 @@ async def _run(task_id: int) -> None:
                 provider = db.get(Provider, task.provider_id) if task.provider_id else None
                 task.status = "running"
                 db.commit()
-                if provider is None:
-                    raise ProviderError("模型服务不存在或已被删除")
                 outputs = await _execute(db, task, provider)
                 for data, mime in outputs:
                     filename = save_media(data, mime)

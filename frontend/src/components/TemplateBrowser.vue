@@ -6,11 +6,26 @@
     <div class="groups">
       <button v-for="g in groups" :key="g" type="button" class="group" :class="{ active: group === g }" @click="group = g">{{ g }}</button>
     </div>
-    <div class="items">
-      <button v-for="t in filtered" :key="t.id" type="button" class="item" :title="t.content" @click="emit('select', t)">
+    <!-- 带变量的模板：先填写变量 -->
+    <div v-if="filling" class="fill">
+      <div class="fill-head">
+        <span class="icon">{{ filling.icon || '📝' }}</span>
+        <b class="ellipsis">{{ filling.title }}</b>
+        <span class="spacer" />
+        <n-button size="tiny" quaternary @click="filling = null">返回</n-button>
+      </div>
+      <div v-for="v in vars" :key="v.name" class="fill-row">
+        <label>{{ v.name }}</label>
+        <n-input v-model:value="values[v.name]" size="small" :placeholder="v.default || `填写${v.name}`" @keydown.enter.prevent="confirmFill" />
+      </div>
+      <div class="fill-preview">{{ preview }}</div>
+      <n-button type="primary" size="small" block @click="confirmFill">使用此模板</n-button>
+    </div>
+    <div v-else class="items">
+      <button v-for="t in filtered" :key="t.id" type="button" class="item" :title="t.content" @click="pick(t)">
         <span class="icon">{{ t.icon || '📝' }}</span>
         <span class="text">
-          <span class="title">{{ t.title }}<span v-if="!t.shared" class="mine">我的</span></span>
+          <span class="title">{{ t.title }}<span v-if="!t.shared" class="mine">我的</span><span v-if="hasVars(t)" class="var-tag">变量</span></span>
           <span class="desc">{{ t.content }}</span>
         </span>
       </button>
@@ -20,10 +35,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { NInput } from 'naive-ui'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { NButton, NInput } from 'naive-ui'
 import { Search } from 'lucide-vue-next'
 import { api } from '../api'
+import { fillVariables, parseVariables } from '../utils/variables'
 
 const props = defineProps({
   category: { type: String, required: true }, // chat / image / video
@@ -50,6 +66,24 @@ const filtered = computed(() => {
   })
 })
 
+const filling = ref(null)
+const values = reactive({})
+const vars = computed(() => (filling.value ? parseVariables(filling.value.content) : []))
+const preview = computed(() => fillVariables(filling.value?.content, values))
+const hasVars = (t) => /\{\{[^{}]+\}\}/.test(t.content)
+
+function pick(t) {
+  if (!parseVariables(t.content).length) return emit('select', t)
+  for (const k of Object.keys(values)) delete values[k]
+  filling.value = t
+}
+
+function confirmFill() {
+  const t = filling.value
+  filling.value = null
+  emit('select', { ...t, content: fillVariables(t.content, values) })
+}
+
 onMounted(async () => {
   templates.value = await api.get(`/api/prompts?category=${props.category}`, { silent: true }).catch(() => [])
 })
@@ -75,5 +109,11 @@ onMounted(async () => {
 .mine { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--primary); }
 .desc { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
 .grid .desc { -webkit-line-clamp: 3; }
+.var-tag { margin-left: 6px; font-size: 10.5px; font-weight: 500; padding: 0 5px; border-radius: 4px; color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.fill { display: flex; flex-direction: column; gap: 8px; }
+.fill-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fill-row { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; font-size: 13px; }
+.fill-row label { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fill-preview { font-size: 12.5px; color: var(--text-2); background: var(--panel-2); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; max-height: 160px; overflow: auto; line-height: 1.6; }
 .empty { text-align: center; padding: 20px 0; font-size: 13px; }
 </style>

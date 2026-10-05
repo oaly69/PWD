@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from typing import Any
 from urllib.parse import quote
 
@@ -24,15 +26,73 @@ DEFAULT_CONTEXT = 30  # 默认携带的历史消息条数
 
 
 def msg_out(m: Message, assets: dict[int, Asset]) -> dict[str, Any]:
+    meta = m.meta or {}
     return {
         "id": m.id,
+        "parent_id": m.parent_id,
         "role": m.role,
         "content": m.content,
         "reasoning": m.reasoning or "",
         "model": m.model or "",
+        "provider_id": meta.get("provider_id"),
+        "compare_group": meta.get("compare_group") or "",
+        "error": meta.get("error") or "",
         "attachments": [asset_out(assets[i]) for i in (m.attachments or []) if i in assets],
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }
+
+
+# ---------------------------------------------------------------- 消息树
+
+
+class Tree:
+    """对话消息树：按父消息分组，计算当前分支路径。"""
+
+    def __init__(self, messages: list[Message]):
+        self.by_id = {m.id: m for m in messages}
+        self.children: dict[int | None, list[Message]] = {}
+        for m in sorted(messages, key=lambda x: x.id):
+            parent = m.parent_id if m.parent_id in self.by_id else None
+            self.children.setdefault(parent, []).append(m)
+
+    def latest_leaf(self, start: int | None) -> int | None:
+        """沿着最新的子消息一路向下，返回分支末端。"""
+        node = start
+        while self.children.get(node):
+            node = self.children[node][-1].id
+        return node
+
+    def path(self, leaf: int | None) -> list[Message]:
+        if leaf not in self.by_id:
+            leaf = self.latest_leaf(None)
+        out: list[Message] = []
+        seen: set[int] = set()
+        while leaf is not None and leaf in self.by_id and leaf not in seen:
+            seen.add(leaf)
+            m = self.by_id[leaf]
+            out.append(m)
+            leaf = m.parent_id
+        return out[::-1]
+
+    def path_to(self, mid: int | None) -> list[Message]:
+        """从根到指定消息（含）的路径；None 表示空路径。"""
+        return self.path(mid) if mid in self.by_id else []
+
+    def siblings(self, m: Message) -> list[Message]:
+        parent = m.parent_id if m.parent_id in self.by_id else None
+        return self.children.get(parent, [])
+
+    def subtree(self, mid: int) -> list[int]:
+        ids, stack = [], [mid]
+        while stack:
+            cur = stack.pop()
+            ids.append(cur)
+            stack.extend(c.id for c in self.children.get(cur, []))
+        return ids
+
+
+def active_path(c: Conversation) -> list[Message]:
+    return Tree(list(c.messages)).path(c.current_leaf_id)
 
 
 def conv_out(c: Conversation, db: Session | None = None, with_messages: bool = False) -> dict[str, Any]:
@@ -49,9 +109,20 @@ def conv_out(c: Conversation, db: Session | None = None, with_messages: bool = F
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
     if with_messages and db is not None:
+        tree = Tree(list(c.messages))
+        path = tree.path(c.current_leaf_id)
         ids = {i for m in c.messages for i in (m.attachments or [])}
         assets = {a.id: a for a in db.query(Asset).filter(Asset.id.in_(ids)).all()} if ids else {}
-        data["messages"] = [msg_out(m, assets) for m in c.messages]
+        out = []
+        for m in path:
+            item = msg_out(m, assets)
+            sib = tree.siblings(m)
+            item["siblings"] = [s.id for s in sib]
+            group = (m.meta or {}).get("compare_group")
+            if group:
+                item["alternatives"] = [msg_out(s, assets) for s in sib if (s.meta or {}).get("compare_group") == group]
+            out.append(item)
+        data["messages"] = out
     return data
 
 
@@ -122,35 +193,65 @@ def delete_conversation(cid: int, db: Session = Depends(get_db), user: User = De
     return {"ok": True}
 
 
+def _message(c: Conversation, mid: int) -> Message:
+    for m in c.messages:
+        if m.id == mid:
+            return m
+    raise HTTPException(status_code=404, detail="消息不存在")
+
+
+def _remove_subtree(db: Session, c: Conversation, mid: int) -> None:
+    tree = Tree(list(c.messages))
+    doomed = set(tree.subtree(mid))
+    target = tree.by_id[mid]
+    if c.current_leaf_id in doomed or c.current_leaf_id not in tree.by_id:
+        rest = Tree([m for m in c.messages if m.id not in doomed])
+        parent = target.parent_id if target.parent_id in rest.by_id else None
+        c.current_leaf_id = rest.latest_leaf(parent)
+    db.query(Message).filter(Message.id.in_(doomed)).delete(synchronize_session=False)
+    db.expire(c, ["messages"])
+
+
 @router.delete("/{cid}/messages/{mid}")
 def delete_message(cid: int, mid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    _get(db, cid, user)
-    m = db.get(Message, mid)
-    if m is None or m.conversation_id != cid:
-        raise HTTPException(status_code=404, detail="消息不存在")
-    db.delete(m)
+    """删除消息及其后续的整个分支。"""
+    c = _get(db, cid, user)
+    _message(c, mid)
+    _remove_subtree(db, c, mid)
     db.commit()
     return {"ok": True}
 
 
 class MessagePatch(BaseModel):
     content: str
-    truncate: bool = False  # 为 True 时删除该消息之后的所有消息（编辑后重新发送）
+    truncate: bool = False  # 为 True 时删除该消息之后的所有消息
 
 
 @router.patch("/{cid}/messages/{mid}")
 def edit_message(cid: int, mid: int, body: MessagePatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
     c = _get(db, cid, user)
-    m = db.get(Message, mid)
-    if m is None or m.conversation_id != cid:
-        raise HTTPException(status_code=404, detail="消息不存在")
+    m = _message(c, mid)
     m.content = body.content
     if body.truncate:
-        for other in list(c.messages):
-            if other.id > mid:
-                db.delete(other)
+        for child in Tree(list(c.messages)).children.get(mid, []):
+            _remove_subtree(db, c, child.id)
+        c.current_leaf_id = mid
     db.commit()
     return {"ok": True}
+
+
+class BranchIn(BaseModel):
+    message_id: int
+
+
+@router.post("/{cid}/branch")
+def switch_branch(cid: int, body: BranchIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """切换到某条消息所在的分支（自动定位到该分支最新的末端）。"""
+    c = _get(db, cid, user)
+    _message(c, body.message_id)
+    c.current_leaf_id = Tree(list(c.messages)).latest_leaf(body.message_id)
+    db.commit()
+    return conv_out(c, db, with_messages=True)
 
 
 @router.get("/{cid}/export", response_class=PlainTextResponse)
@@ -159,7 +260,7 @@ def export_conversation(cid: int, db: Session = Depends(get_db), user: User = De
     lines = [f"# {c.title}", ""]
     if c.system_prompt.strip():
         lines += ["> **角色设定**", ">", *[f"> {ln}" for ln in c.system_prompt.splitlines()], ""]
-    for m in c.messages:
+    for m in active_path(c):
         who = "🧑 我" if m.role == "user" else f"🤖 {m.model or c.model or '助手'}"
         lines += [f"### {who}", "", m.content, ""]
     filename = quote(f"{c.title}.md")
@@ -169,23 +270,34 @@ def export_conversation(cid: int, db: Session = Depends(get_db), user: User = De
     )
 
 
+class ModelRef(BaseModel):
+    provider_id: int
+    model: str = Field(..., min_length=1)
+
+
 class SendIn(BaseModel):
     content: str = ""
     attachments: list[int] = Field(default_factory=list, max_length=10)
-    regenerate: bool = False  # 为 True 时不新增用户消息，基于现有历史重新生成
+    # 为 True 时不新增用户消息，为 parent_id（或当前分支最后一条用户消息）重新生成一个回答分支
+    regenerate: bool = False
+    # 新消息挂在哪条消息下面：-1 表示当前分支末端；null 表示作为新的第一条消息（编辑首条消息）
+    parent_id: int | None = -1
+    # 多模型对比：同时请求多个模型，回答并列展示；为空时使用对话设置的模型
+    models: list[ModelRef] = Field(default_factory=list, max_length=4)
 
 
 def _sse(data: dict[str, Any]) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _build_history(db: Session, c: Conversation) -> list[dict[str, Any]]:
+def _build_history(db: Session, c: Conversation, path: list[Message]) -> list[dict[str, Any]]:
     params = c.params or {}
     context = int(params.get("context_count") or DEFAULT_CONTEXT)
     history: list[dict[str, Any]] = []
     if c.system_prompt.strip():
         history.append({"role": "system", "content": c.system_prompt})
-    for m in c.messages[-context:]:
+    usable = [m for m in path if m.role == "user" or m.content]  # 跳过生成失败的空回答
+    for m in usable[-context:]:
         if m.role == "user" and m.attachments:
             parts: list[dict[str, Any]] = []
             if m.content:
@@ -202,19 +314,33 @@ def _build_history(db: Session, c: Conversation) -> list[dict[str, Any]]:
     return history
 
 
+def _chat_provider(db: Session, provider_id: int | None) -> Provider:
+    provider = db.get(Provider, provider_id) if provider_id else None
+    if provider is None or provider.kind != "openai":
+        raise HTTPException(status_code=400, detail="请先为对话选择一个 OpenAI 兼容的模型服务")
+    if not provider.enabled:
+        raise HTTPException(status_code=400, detail=f"模型服务「{provider.name}」已停用")
+    return provider
+
+
 @router.post("/{cid}/messages")
 async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     c = _get(db, cid, user)
-    provider = db.get(Provider, c.provider_id) if c.provider_id else None
-    if provider is None or provider.kind != "openai":
-        raise HTTPException(status_code=400, detail="请先为对话选择一个 OpenAI 兼容的模型服务")
-    if not c.model:
-        raise HTTPException(status_code=400, detail="请先为对话选择模型")
+    targets = [(_chat_provider(db, r.provider_id), r.model) for r in body.models]
+    if not targets:
+        if not c.model:
+            raise HTTPException(status_code=400, detail="请先为对话选择模型")
+        targets = [(_chat_provider(db, c.provider_id), c.model)]
 
+    tree = Tree(list(c.messages))
     if body.regenerate:
-        while c.messages and c.messages[-1].role == "assistant":
-            db.delete(c.messages[-1])
-            c.messages.pop()
+        if body.parent_id not in (-1, None):
+            anchor = tree.by_id.get(body.parent_id)
+        else:
+            anchor = next((m for m in reversed(tree.path(c.current_leaf_id)) if m.role == "user"), None)
+        if anchor is None or anchor.role != "user":
+            raise HTTPException(status_code=400, detail="没有可重新生成的消息")
+        parent = anchor
     else:
         if not body.content.strip() and not body.attachments:
             raise HTTPException(status_code=400, detail="消息内容不能为空")
@@ -222,51 +348,97 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), us
             owned = db.query(Asset.id).filter(Asset.id.in_(body.attachments), Asset.user_id == user.id).count()
             if owned != len(set(body.attachments)):
                 raise HTTPException(status_code=400, detail="附件不存在")
-        db.add(Message(conversation_id=c.id, role="user", content=body.content, attachments=body.attachments))
+        if body.parent_id == -1:
+            parent_id = c.current_leaf_id if c.current_leaf_id in tree.by_id else tree.latest_leaf(None)
+        else:
+            parent_id = body.parent_id
+            if parent_id is not None and parent_id not in tree.by_id:
+                raise HTTPException(status_code=400, detail="父消息不存在")
+        parent = Message(conversation_id=c.id, parent_id=parent_id, role="user", content=body.content, attachments=body.attachments)
+        db.add(parent)
         if c.title == "新对话":
             first = body.content.strip().splitlines()[0] if body.content.strip() else "图片对话"
             c.title = first[:30]
+        db.flush()
+
+    history = _build_history(db, c, [*tree.path_to(parent.parent_id), parent])
+    group = uuid.uuid4().hex[:12] if len(targets) > 1 else ""
+    replies: list[Message] = []
+    for provider, model in targets:
+        meta = {"provider_id": provider.id}
+        if group:
+            meta["compare_group"] = group
+        reply = Message(conversation_id=c.id, parent_id=parent.id, role="assistant", content="", model=model, meta=meta)
+        db.add(reply)
+        replies.append(reply)
+    db.flush()
+    c.current_leaf_id = replies[0].id
     c.updated_at = utcnow()
     db.commit()
-    db.refresh(c)
 
-    history = _build_history(db, c)
-    if not any(h["role"] == "user" for h in history):
-        raise HTTPException(status_code=400, detail="没有可发送的消息")
     params = dict(c.params or {})
-    model = c.model
+    jobs = [(i, provider, model, reply.id) for i, ((provider, model), reply) in enumerate(zip(targets, replies))]
+    head = {
+        "start": True,
+        "user_message_id": parent.id,
+        "compare_group": group,
+        "replies": [{"i": i, "id": mid, "model": model, "provider_id": provider.id} for i, provider, model, mid in jobs],
+    }
 
-    def save_reply(content: str, reasoning: str) -> int | None:
-        if not content and not reasoning:
-            return None
+    def save_reply(mid: int, content: str, reasoning: str, error: str = "") -> None:
         with new_session() as s:
-            msg = Message(conversation_id=cid, role="assistant", content=content, reasoning=reasoning, model=model)
-            s.add(msg)
+            msg = s.get(Message, mid)
+            if msg is None:
+                return
+            msg.content = content
+            msg.reasoning = reasoning
+            if error:
+                msg.meta = {**(msg.meta or {}), "error": error}
             conv = s.get(Conversation, cid)
             if conv:
                 conv.updated_at = utcnow()
             s.commit()
-            return msg.id
 
     async def stream():
-        content: list[str] = []
-        reasoning: list[str] = []
-        saved = False
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def worker(i: int, provider: Provider, model: str, mid: int) -> None:
+            content: list[str] = []
+            reasoning: list[str] = []
+            finished = False
+            try:
+                async for kind, delta in openai_compat.chat_stream(provider, model, history, params):
+                    (content if kind == "content" else reasoning).append(delta)
+                    await queue.put({"i": i, "delta": delta} if kind == "content" else {"i": i, "reasoning": delta})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                finished = True
+                err = str(exc) or exc.__class__.__name__
+                save_reply(mid, "".join(content), "".join(reasoning), err)
+                await queue.put({"i": i, "error": err, "message_id": mid})
+            else:
+                finished = True
+                save_reply(mid, "".join(content), "".join(reasoning))
+                await queue.put({"i": i, "done": True, "message_id": mid})
+            finally:
+                # 客户端中途断开（点击“停止”）时也保留已生成的部分内容
+                if not finished:
+                    save_reply(mid, "".join(content), "".join(reasoning))
+
+        workers = [asyncio.create_task(worker(*job)) for job in jobs]
         try:
-            async for kind, delta in openai_compat.chat_stream(provider, model, history, params):
-                (content if kind == "content" else reasoning).append(delta)
-                yield _sse({"delta": delta} if kind == "content" else {"reasoning": delta})
-        except Exception as exc:  # noqa: BLE001
-            saved = True
-            mid = save_reply("".join(content), "".join(reasoning))
-            yield _sse({"error": str(exc) or exc.__class__.__name__, "message_id": mid})
-        else:
-            saved = True
-            yield _sse({"done": True, "message_id": save_reply("".join(content), "".join(reasoning))})
+            yield _sse(head)
+            remaining = len(workers)
+            while remaining:
+                event = await queue.get()
+                if event.get("done") or "error" in event:
+                    remaining -= 1
+                yield _sse(event)
         finally:
-            # 客户端中途断开（点击“停止”）时也保留已生成的部分内容
-            if not saved:
-                save_reply("".join(content), "".join(reasoning))
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -278,7 +450,7 @@ async def auto_title(cid: int, db: Session = Depends(get_db), user: User = Depen
     provider = db.get(Provider, c.provider_id) if c.provider_id else None
     if provider is None or not c.model or not c.messages:
         raise HTTPException(status_code=400, detail="对话为空或未选择模型")
-    snippet = "\n".join(f"{m.role}: {m.content[:300]}" for m in c.messages[:4])
+    snippet = "\n".join(f"{m.role}: {m.content[:300]}" for m in active_path(c)[:4])
     try:
         title = await openai_compat.chat_complete(provider, c.model, [
             {"role": "system", "content": "根据对话内容生成一个不超过 15 个字的中文标题，只输出标题本身，不要标点和引号。"},

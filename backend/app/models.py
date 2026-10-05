@@ -77,6 +77,8 @@ class Conversation(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     icon: Mapped[str] = mapped_column(String(16), default="")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 当前显示的分支末端消息（对话是一棵消息树，编辑 / 重新生成会产生分支）
+    current_leaf_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 模型参数：temperature / top_p / max_tokens / context_count
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -92,11 +94,14 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"))
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), nullable=True, index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text, default="")
     reasoning: Mapped[str] = mapped_column(Text, default="")  # 推理模型的思考过程
     attachments: Mapped[list] = mapped_column(JSON, default=list)  # 附件作品 ID 列表
     model: Mapped[str] = mapped_column(String(255), default="")
+    # provider_id / compare_group（多模型对比批次）/ error（生成失败原因）
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
@@ -141,10 +146,23 @@ class Asset(Base):
     prompt: Mapped[str] = mapped_column(Text, default="")
     model: Mapped[str] = mapped_column(String(255), default="")
     favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    board_id: Mapped[int | None] = mapped_column(ForeignKey("boards.id", ondelete="SET NULL"), nullable=True, index=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     task: Mapped[Task | None] = relationship(back_populates="assets")
+
+
+class Board(Base):
+    """作品集：把作品按项目 / 主题归类。"""
+
+    __tablename__ = "boards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PromptTemplate(Base):

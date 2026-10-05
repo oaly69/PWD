@@ -38,7 +38,24 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("prompts", "user_id", "INTEGER REFERENCES users(id) ON DELETE CASCADE"),
     ("prompts", "group", "VARCHAR(32) DEFAULT ''"),
     ("prompts", "builtin", "BOOLEAN DEFAULT 0"),
+    # v0.4 对话分支
+    ("messages", "parent_id", "INTEGER REFERENCES messages(id) ON DELETE CASCADE"),
+    ("messages", "meta", "JSON DEFAULT '{}'"),
+    ("conversations", "current_leaf_id", "INTEGER"),
+    ("assets", "board_id", "INTEGER REFERENCES boards(id) ON DELETE SET NULL"),
 ]
+
+# 只在字段刚被添加时执行一次的回填（不可重复执行的数据迁移放这里）
+ON_ADD: dict[tuple[str, str], list[str]] = {
+    # 旧版对话是线性的：每条消息的父消息就是前一条
+    ("messages", "parent_id"): [
+        "UPDATE messages SET parent_id = (SELECT MAX(m2.id) FROM messages m2 "
+        "WHERE m2.conversation_id = messages.conversation_id AND m2.id < messages.id)",
+    ],
+    ("conversations", "current_leaf_id"): [
+        "UPDATE conversations SET current_leaf_id = (SELECT MAX(id) FROM messages WHERE conversation_id = conversations.id)",
+    ],
+}
 
 # 数据迁移：单用户时代的数据归属到最早的管理员；提示词保持为空（即公共模板）
 DATA_MIGRATIONS = [
@@ -50,12 +67,15 @@ DATA_MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id)",
     "CREATE INDEX IF NOT EXISTS ix_assets_user_id ON assets (user_id)",
     "CREATE INDEX IF NOT EXISTS ix_prompts_user_id ON prompts (user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_messages_parent_id ON messages (parent_id)",
+    "CREATE INDEX IF NOT EXISTS ix_assets_board_id ON assets (board_id)",
 ]
 
 
 def run(engine: Engine) -> None:
     insp = inspect(engine)
     tables = set(insp.get_table_names())
+    added: list[tuple[str, str]] = []
     with engine.begin() as conn:
         for table, column, ddl in COLUMNS:
             if table not in tables:
@@ -64,5 +84,9 @@ def run(engine: Engine) -> None:
             if column not in existing:
                 log.info("迁移：%s 增加字段 %s", table, column)
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
+                added.append((table, column))
+        for key in added:
+            for sql in ON_ADD.get(key, []):
+                conn.execute(text(sql))
         for sql in DATA_MIGRATIONS:
             conn.execute(text(sql))

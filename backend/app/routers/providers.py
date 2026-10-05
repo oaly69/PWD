@@ -152,7 +152,11 @@ def list_providers(db: Session = Depends(get_db), user: User = Depends(current_u
 
 @router.get("/comfyui/example", dependencies=[Depends(require_admin)])
 def comfyui_example():
-    return {"workflows": {"SDXL 文生图": comfyui.EXAMPLE_WORKFLOW}}
+    return {"workflows": {
+        "SDXL 文生图": comfyui.EXAMPLE_WORKFLOW,
+        "SDXL 局部重绘": comfyui.EXAMPLE_INPAINT,
+        "4x 高清放大": comfyui.EXAMPLE_UPSCALE,
+    }}
 
 
 class DraftTestIn(ProviderIn):

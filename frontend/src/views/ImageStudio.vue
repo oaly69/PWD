@@ -1,8 +1,16 @@
 <template>
   <StudioShell title="图像生成" :icon="ImageIcon">
     <div class="block">
-      <div class="field-label">模型</div>
+      <div class="field-label">
+        模型
+        <span class="spacer" />
+        <n-button text size="tiny" :type="compare ? 'primary' : 'default'" @click="compare = !compare"><template #icon><Columns3 :size="13" /></template>多模型对比</n-button>
+      </div>
       <ModelSelect v-model="modelKey" kind="image" />
+      <template v-if="compare">
+        <ModelSelect v-model="compareKeys" kind="image" multiple placeholder="再选 1～3 个模型，用同一提示词同时生成" class="compare-select" />
+        <div class="muted hint">每个模型各生成一个任务，结果在右侧并列出现，便于比较效果</div>
+      </template>
     </div>
 
     <div class="block">
@@ -61,7 +69,7 @@
     <template #footer>
       <n-button type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !form.prompt.trim()" @click="generate">
         <template #icon><Sparkles :size="18" /></template>
-        生成 {{ form.n > 1 ? `${form.n} 张` : '' }}
+        生成 {{ form.n > 1 ? `${form.n} 张` : '' }}{{ extraKeys.length ? ` · ${extraKeys.length + 1} 个模型` : '' }}
         <span class="kbd">Ctrl ↵</span>
       </n-button>
     </template>
@@ -75,7 +83,7 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NInput, NInputGroup, NInputNumber, NRadioButton, NRadioGroup, NSlider } from 'naive-ui'
-import { Dices, Image as ImageIcon, Sparkles } from 'lucide-vue-next'
+import { Columns3, Dices, Image as ImageIcon, Sparkles } from 'lucide-vue-next'
 import AspectPicker from '../components/AspectPicker.vue'
 import ModelSelect from '../components/ModelSelect.vue'
 import PromptInput from '../components/PromptInput.vue'
@@ -84,6 +92,7 @@ import StudioShell from '../components/StudioShell.vue'
 import TaskFeed from '../components/TaskFeed.vue'
 import { api, toast } from '../api'
 import { STYLE_PRESETS } from '../constants'
+import { splitModelKey } from '../store'
 import { useStudio } from '../composables/studio'
 
 const form = reactive({ prompt: '', negative_prompt: '', size: '1024x1024', n: 1, seed: null, steps: 25 })
@@ -91,6 +100,9 @@ const style = ref(null)
 const refs = ref([])
 const extraText = ref('')
 const feed = ref(null)
+const compare = ref(false)
+const compareKeys = ref([])
+const extraKeys = computed(() => (compare.value ? compareKeys.value.filter((k) => k !== modelKey.value).slice(0, 3) : []))
 
 function applyParams(prompt, params, providerId, model) {
   form.prompt = prompt || ''
@@ -143,7 +155,7 @@ async function generate() {
       return toast('额外请求参数不是合法的 JSON', 'error')
     }
   }
-  const task = await submit({
+  const body = {
     prompt: form.prompt.trim(),
     negative_prompt: form.negative_prompt,
     size: form.size,
@@ -155,8 +167,15 @@ async function generate() {
     style_negative: style.value?.negative || null,
     reference_asset_ids: refs.value.map((r) => r.id),
     extra_body,
-  })
+  }
+  const task = await submit(body)
   feed.value?.add(task)
+  // 对比模式：其余模型使用相同参数各提交一个任务（ComfyUI 专属参数对其他服务无影响）
+  for (const key of extraKeys.value) {
+    const [provider_id, model] = splitModelKey(key)
+    const t = await api.post('/api/generate/image', { ...body, provider_id, model }).catch(() => null)
+    if (t) feed.value?.add(t)
+  }
 }
 </script>
 
@@ -167,6 +186,8 @@ async function generate() {
 .style-chip:hover { border-color: var(--primary); color: var(--text); }
 .style-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 .size-input { margin-top: 8px; }
+.block > .field-label { display: flex; align-items: center; }
+.compare-select { margin-top: 8px; }
 .count { display: flex; }
 .count :deep(.n-radio-button) { flex: 1; text-align: center; }
 .kbd { margin-left: 8px; font-size: 11px; opacity: .7; padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, .18); }

@@ -1,12 +1,14 @@
 <template>
   <n-select
-    :value="modelValue || null"
+    :value="multiple ? modelValue || [] : modelValue || null"
     :options="options"
     :size="size"
+    :multiple="multiple"
+    :max-tag-count="multiple ? 'responsive' : undefined"
     filterable
     :placeholder="placeholder"
     :consistent-menu-width="false"
-    @update:value="(v) => emit('update:modelValue', v || '')"
+    @update:value="(v) => emit('update:modelValue', multiple ? v || [] : v || '')"
   >
     <template #empty>
       <div class="empty">
@@ -24,7 +26,8 @@ import { NSelect } from 'naive-ui'
 import { loadProviders, modelOptions, store } from '../store'
 
 const props = defineProps({
-  modelValue: { type: String, default: '' },
+  modelValue: { type: [String, Array], default: '' },
+  multiple: { type: Boolean, default: false },
   kind: { type: String, default: 'chat' },
   size: { type: String, default: 'medium' },
   placeholder: { type: String, default: '选择模型' },

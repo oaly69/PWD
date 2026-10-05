@@ -41,6 +41,9 @@
               <template v-if="current.params?.voice"><dt>音色</dt><dd>{{ current.params.voice }}</dd></template>
               <template v-if="current.params?.seconds"><dt>时长</dt><dd>{{ current.params.seconds }} 秒</dd></template>
               <dt>大小</dt><dd>{{ formatBytes(current.size) }}</dd>
+              <template v-if="boards"><dt>作品集</dt><dd>
+                <n-select size="tiny" :value="current.board_id || 0" :options="boardOptions" :consistent-menu-width="false" class="board-select" @update:value="moveTo" />
+              </dd></template>
               <dt>时间</dt><dd>{{ formatTime(current.created_at) }}</dd>
             </dl>
           </div>
@@ -51,6 +54,9 @@
               {{ current.favorite ? '已收藏' : '收藏' }}
             </n-button>
             <n-button secondary @click="downloadUrl(current.url, `pwd-${current.id}`)"><template #icon><Download :size="16" /></template>下载</n-button>
+            <n-dropdown v-if="current.kind === 'image'" trigger="click" :options="EDIT_OPS" @select="(k) => { editOp = k; editing = current }">
+              <n-button secondary type="primary"><template #icon><Wand2 :size="16" /></template>编辑图片</n-button>
+            </n-dropdown>
             <n-button v-if="current.kind === 'image'" secondary @click="goStudio('image', 'ref')"><template #icon><ImagePlus :size="16" /></template>作为参考图</n-button>
             <n-button v-if="current.kind === 'image'" secondary @click="goStudio('video', 'ref')"><template #icon><Film :size="16" /></template>生成视频</n-button>
             <n-button v-if="current.source === 'generated' && studio" secondary @click="goStudio(studio, 'asset')"><template #icon><Repeat :size="16" /></template>复用参数</n-button>
@@ -60,23 +66,34 @@
       </div>
     </transition>
   </Teleport>
+  <ImageEditor v-model:asset="editing" :initial-op="editOp" />
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag } from 'naive-ui'
-import { ChevronLeft, ChevronRight, Copy, Download, Film, ImagePlus, Music, Repeat, Star, Trash2, X } from 'lucide-vue-next'
+import { NButton, NDropdown, NSelect, NTag } from 'naive-ui'
+import ImageEditor from './ImageEditor.vue'
+import { ChevronLeft, ChevronRight, Copy, Download, Film, ImagePlus, Music, Repeat, Star, Trash2, Wand2, X } from 'lucide-vue-next'
 import { api, confirmDialog, toast } from '../api'
 import { copyText, downloadUrl, formatBytes, formatTime } from '../utils/format'
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
   index: { type: Number, default: -1 },
+  boards: { type: Array, default: null }, // 传入时显示「作品集」选择
 })
 const emit = defineEmits(['update:index', 'deleted', 'changed'])
 const router = useRouter()
 const zoom = ref(false)
+const editing = ref(null)
+const editOp = ref('inpaint')
+const EDIT_OPS = [
+  { label: '局部重绘', key: 'inpaint' },
+  { label: '扩图', key: 'outpaint' },
+  { label: '高清放大', key: 'upscale' },
+  { label: '去除背景', key: 'rembg' },
+]
 
 const current = computed(() => (props.index >= 0 ? props.items[props.index] : null))
 const studio = computed(() => ({ image: 'image', video: 'video', audio: 'speech' })[current.value?.kind])
@@ -93,6 +110,16 @@ async function toggleFav() {
   const a = current.value
   const r = await api.patch(`/api/assets/${a.id}`, { favorite: !a.favorite })
   a.favorite = r.favorite
+  emit('changed', a)
+}
+
+const boardOptions = computed(() => [{ label: '未归类', value: 0 }, ...(props.boards || []).map((b) => ({ label: b.name, value: b.id }))])
+
+async function moveTo(boardId) {
+  const a = current.value
+  const r = await api.patch(`/api/assets/${a.id}`, { board_id: boardId })
+  a.board_id = r.board_id
+  toast(boardId ? '已移入作品集' : '已移出作品集', 'success')
   emit('changed', a)
 }
 
@@ -116,7 +143,7 @@ async function remove() {
 }
 
 function onKey(e) {
-  if (!current.value || ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
+  if (!current.value || editing.value || ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
   if (e.key === 'Escape') close()
   else if (e.key === 'ArrowLeft') go(-1)
   else if (e.key === 'ArrowRight') go(1)
@@ -150,6 +177,7 @@ video.media { cursor: default; }
 .meta { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .meta dt { color: var(--muted); }
 .meta dd { margin: 0; word-break: break-all; }
+.board-select { width: 160px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px 18px 18px; border-top: 1px solid var(--border); }
 .fade-enter-active, .fade-leave-active { transition: opacity .15s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

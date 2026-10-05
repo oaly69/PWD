@@ -80,13 +80,15 @@
         <div class="field-label" style="margin: 0">工作流</div>
         <span class="spacer" />
         <n-button size="small" secondary :loading="testing" :disabled="!form.base_url" @click="fetchModels">测试连接</n-button>
-        <n-button size="small" secondary @click="addExample"><template #icon><Plus :size="14" /></template>示例工作流</n-button>
+        <n-dropdown trigger="click" :options="EXAMPLES" @select="addExample">
+          <n-button size="small" secondary><template #icon><Plus :size="14" /></template>示例工作流</n-button>
+        </n-dropdown>
         <n-button size="small" secondary @click="importInput?.click()"><template #icon><Upload :size="14" /></template>导入 JSON</n-button>
         <input ref="importInput" type="file" accept=".json,application/json" hidden @change="importFile" />
       </div>
       <div v-if="result" class="result" :class="result.ok ? 'ok' : 'err'">{{ result.message }}</div>
       <div class="hint" style="margin-bottom: 10px">
-        在 ComfyUI 中使用「导出 (API)」得到工作流 JSON。可用占位符：<code v-pre>{{prompt}} {{negative_prompt}} {{seed}} {{width}} {{height}} {{steps}} {{batch_size}} {{image}}</code>，其中 image 为参考图文件名，配合 LoadImage 节点使用。
+        在 ComfyUI 中使用「导出 (API)」得到工作流 JSON。可用占位符：<code v-pre>{{prompt}} {{negative_prompt}} {{seed}} {{width}} {{height}} {{steps}} {{batch_size}} {{image}} {{mask}} {{scale}}</code>。image 为参考图 / 待编辑图的文件名，配合 LoadImage 节点使用（局部重绘时重绘区域为透明，LoadImage 的 MASK 输出即为蒙版）；mask 为白色=重绘区域的蒙版图；scale 为放大倍数。
       </div>
       <div v-for="(w, i) in workflows" :key="w.uid" class="wf">
         <div class="wf-head">
@@ -107,7 +109,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NInput, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
+import { NButton, NCollapse, NCollapseItem, NDropdown, NInput, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
 import { AudioLines, Film, Image as ImageIcon, Layers, MessageSquare, Plus, RefreshCw, Trash2, Upload, Wand2 } from 'lucide-vue-next'
 import EmptyState from './EmptyState.vue'
 import { api, toast } from '../api'
@@ -199,11 +201,20 @@ watch(workflows, (list) => {
   extra.workflow_kinds = kinds
 }, { deep: true, immediate: true })
 
-async function addExample() {
+const EXAMPLES = [
+  { label: 'SDXL 文生图', key: 'SDXL 文生图' },
+  { label: 'SDXL 局部重绘 / 扩图', key: 'SDXL 局部重绘' },
+  { label: '4x 高清放大', key: '4x 高清放大' },
+]
+
+async function addExample(name = 'SDXL 文生图') {
   const data = await api.get('/api/providers/comfyui/example').catch(() => null)
-  const wf = data?.workflows?.['SDXL 文生图']
+  const wf = data?.workflows?.[name]
   if (!wf) return
-  workflows.value.push({ uid: ++uid, name: workflows.value.length ? `SDXL 文生图 ${workflows.value.length + 1}` : 'SDXL 文生图', kind: 'image', text: JSON.stringify(wf, null, 2) })
+  const taken = new Set(workflows.value.map((w) => w.name))
+  let title = name
+  for (let i = 2; taken.has(title); i++) title = `${name} ${i}`
+  workflows.value.push({ uid: ++uid, name: title, kind: 'image', text: JSON.stringify(wf, null, 2) })
 }
 
 async function importFile(e) {
