@@ -221,6 +221,17 @@
             <div class="stat"><b>{{ formatBytes(stats.site.storage_bytes) }}</b><span>媒体占用</span></div>
           </div>
         </section>
+        <section v-if="storage" class="sec">
+          <h3>媒体存储</h3>
+          <template v-if="storage.backend === 's3'">
+            <p class="muted desc">
+              已启用对象存储：<code>{{ storage.endpoint }}/{{ storage.bucket }}/{{ storage.prefix }}</code>。新文件会在后台上传，本地保留 {{ storage.cache_days || '∞' }} 天缓存。
+              <template v-if="storage.pending_uploads">当前有 {{ storage.pending_uploads }} 个文件正在上传。</template>
+            </p>
+            <n-button secondary :loading="syncing" @click="syncStorage">把本地已有文件同步到对象存储</n-button>
+          </template>
+          <p v-else class="muted desc">当前使用本地磁盘（数据目录下的 media）。如需使用 S3 / MinIO / R2 等对象存储，请设置 PWD_S3_* 环境变量后重启，详见 README。</p>
+        </section>
         <section class="sec">
           <h3>备份</h3>
           <p class="muted desc">导出包含数据库快照、会话密钥与全部媒体文件的 zip。恢复时停止容器，把 zip 解压到数据目录（/data）后重新启动即可。</p>
@@ -292,6 +303,18 @@ const totp = ref(null)
 const totpCode = ref('')
 const disablePwd = ref('')
 const usage = ref(null)
+const storage = ref(null)
+const syncing = ref(false)
+
+async function syncStorage() {
+  syncing.value = true
+  try {
+    const r = await api.post('/api/system/storage/sync')
+    toast(`同步完成：上传 ${r.uploaded} 个，已存在 ${r.skipped} 个${r.failed ? `，失败 ${r.failed} 个` : ''}`, r.failed ? 'warning' : 'success')
+  } finally {
+    syncing.value = false
+  }
+}
 const s = reactive({ site_name: '', default_system_prompt: '' })
 const keys = reactive({ chat: '', image: '', video: '', tts: '', enhance: '', stt: '' })
 const search = reactive({ search_engine: '', search_url: '', search_api_key: '', search_max_results: 5 })
@@ -454,6 +477,7 @@ onMounted(async () => {
   if (!admin.value) return
   await load()
   stats.value = await api.get('/api/stats')
+  storage.value = await api.get('/api/system/storage').catch(() => null)
 })
 onUnmounted(() => window.removeEventListener('resize', onResize))
 </script>

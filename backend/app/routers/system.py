@@ -122,6 +122,28 @@ def stats(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return data
 
 
+@router.get("/system/storage", dependencies=[Depends(require_admin)])
+def storage_status():
+    from ..services import storage
+
+    return storage.status()
+
+
+@router.post("/system/storage/sync")
+async def storage_sync(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """把本地已有的媒体文件同步到对象存储（启用对象存储前的存量数据）。"""
+    import asyncio
+
+    from ..services import storage
+
+    if not storage.enabled():
+        raise HTTPException(status_code=400, detail="未配置对象存储（PWD_S3_* 环境变量）")
+    result = await asyncio.to_thread(storage.sync_all)
+    audit(db, user, "system.storage_sync", detail=str(result), request=request)
+    db.commit()
+    return result
+
+
 @router.get("/system/backup")
 def backup(background: BackgroundTasks, request: Request, include_media: bool = True,
            db: Session = Depends(get_db), user: User = Depends(require_admin)):

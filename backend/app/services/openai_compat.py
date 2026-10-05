@@ -370,8 +370,9 @@ async def generate_video(
     reference: tuple[bytes, str] | None,
     on_progress: ProgressCallback,
     timeout: float = 3600,
+    resume_id: str | None = None,
 ) -> list[tuple[bytes, str]]:
-    """异步视频生成。extra.video_api 选择接口风格：
+    """异步视频生成。resume_id 为已提交的远端任务 ID 时跳过提交，直接继续轮询。extra.video_api 选择接口风格：
 
       - openai：OpenAI Sora 风格 POST /videos → GET /videos/{id} → GET /videos/{id}/content
       - siliconflow：POST /video/submit → POST /video/status
@@ -380,11 +381,13 @@ async def generate_video(
     deadline = time.monotonic() + timeout
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
         if api == "siliconflow":
-            return await _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline)
-        return await _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline)
+            return await _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
+        return await _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
 
 
-async def _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline):
+async def _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id=None):
+    if resume_id:
+        return await _poll_openai_video(client, provider, resume_id, on_progress, deadline)
     form: dict[str, str] = {"model": model, "prompt": prompt}
     if params.get("size"):
         form["size"] = str(params["size"])
@@ -402,6 +405,10 @@ async def _video_openai(client, provider, model, prompt, params, reference, on_p
     if not job_id:
         raise ProviderError(f"服务未返回任务 ID：{str(job)[:300]}")
     await on_progress(int(job.get("progress") or 0), job_id)
+    return await _poll_openai_video(client, provider, job_id, on_progress, deadline)
+
+
+async def _poll_openai_video(client, provider, job_id, on_progress, deadline):
     while time.monotonic() < deadline:
         await asyncio.sleep(5)
         r = await client.get(f"{_base(provider)}/videos/{job_id}", headers=_headers(provider))
@@ -419,7 +426,9 @@ async def _video_openai(client, provider, model, prompt, params, reference, on_p
     raise ProviderError("等待视频生成超时")
 
 
-async def _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline):
+async def _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id=None):
+    if resume_id:
+        return await _poll_siliconflow_video(client, provider, resume_id, on_progress, deadline)
     body: dict[str, Any] = {"model": model, "prompt": prompt}
     if params.get("size"):
         body["image_size"] = params["size"]
@@ -439,6 +448,10 @@ async def _video_siliconflow(client, provider, model, prompt, params, reference,
     if not request_id:
         raise ProviderError(f"服务未返回任务 ID：{resp.text[:300]}")
     await on_progress(0, request_id)
+    return await _poll_siliconflow_video(client, provider, request_id, on_progress, deadline)
+
+
+async def _poll_siliconflow_video(client, provider, request_id, on_progress, deadline):
     started = time.monotonic()
     while time.monotonic() < deadline:
         await asyncio.sleep(5)

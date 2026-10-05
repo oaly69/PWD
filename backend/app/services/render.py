@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from .media import media_path
+from .media import local_media as media_path
 from .openai_compat import ProviderError
 
 FPS = 25

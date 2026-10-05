@@ -13,3 +13,8 @@ app.config.errorHandler = (err) => {
 }
 
 app.use(router).mount('#app')
+
+// PWA：生产环境注册 Service Worker（仅缓存静态资源，可添加到桌面 / 主屏幕）
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}))
+}

@@ -26,14 +26,32 @@ def _sem(kind: str) -> asyncio.Semaphore:
     return _semaphores[kind]
 
 
-def recover_interrupted() -> None:
-    """服务重启时，把仍处于运行状态的任务标记为失败。"""
+def _resumable(task: Task, provider: Provider | None) -> bool:
+    """已提交到远端的异步任务（视频接口、ComfyUI）重启后可以继续轮询，不会重复提交。"""
+    if not task.external_id or provider is None:
+        return False
+    return task.kind == "video" or provider.kind == "comfyui"
+
+
+def recover_interrupted() -> list[int]:
+    """服务重启后恢复任务：排队中的重新提交；已提交到远端的异步任务继续轮询；
+    其余执行到一半的同步任务（如图像、语音）无法得知结果，标记为中断，可在任务中心重试。
+    返回需要重新提交的任务 ID。"""
+    resume: list[int] = []
     with new_session() as db:
-        for task in db.query(Task).filter(Task.status.in_(ACTIVE)).all():
-            task.status = "failed"
-            task.error = "服务重启，任务被中断"
-            task.finished_at = utcnow()
+        for task in db.query(Task).filter(Task.status.in_(ACTIVE)).order_by(Task.id).all():
+            provider = db.get(Provider, task.provider_id) if task.provider_id else None
+            if task.status == "pending" or _resumable(task, provider):
+                task.status = "pending"
+                resume.append(task.id)
+            else:
+                task.status = "failed"
+                task.error = "服务重启，任务被中断（可点击重试）"
+                task.finished_at = utcnow()
         db.commit()
+    if resume:
+        log.info("恢复 %d 个未完成的任务", len(resume))
+    return resume
 
 
 def submit(task_id: int) -> None:
@@ -195,15 +213,17 @@ async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[byte
         return await _execute_op(db, task, provider, prompt, params, on_progress)
     assert provider is not None
     refs = _load_references(db, params.get("reference_asset_ids"))
+    # 重启后继续轮询已提交的远端任务
+    resume = {"resume_id": task.external_id} if task.external_id else {}
     if provider.kind == "comfyui":
         if task.kind == "tts":
             raise ProviderError("ComfyUI 暂不支持语音合成")
-        return await comfyui.generate(provider, task.model, prompt, params, refs, on_progress)
+        return await comfyui.generate(provider, task.model, prompt, params, refs, on_progress, **resume)
     if task.kind == "image":
         return await openai_compat.generate_images(provider, task.model, prompt, params, refs)
     if task.kind == "video":
         return await openai_compat.generate_video(
-            provider, task.model, prompt, params, refs[0] if refs else None, on_progress
+            provider, task.model, prompt, params, refs[0] if refs else None, on_progress, **resume
         )
     if task.kind == "tts":
         return [await openai_compat.speech(provider, task.model, task.prompt, params)]

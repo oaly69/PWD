@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -21,13 +22,33 @@ log = logging.getLogger("pwd")
 async def lifespan(_app: FastAPI):
     if db.engine is None:
         db.init_engine()
-    tasks.recover_interrupted()
+    for task_id in tasks.recover_interrupted():
+        tasks.submit(task_id)
     with db.new_session() as session:
         seed_if_upgraded(session)
     log.info("PWD %s 已启动，数据目录：%s", VERSION, settings.data_dir)
     if settings.install_token:
         log.info("已启用安装令牌保护（PWD_INSTALL_TOKEN）")
+    from .services import storage
+
+    janitor = None
+    if storage.enabled():
+        log.info("已启用对象存储：%s/%s", settings.s3_endpoint, settings.s3_bucket)
+
+        async def clean_cache() -> None:
+            while True:
+                await asyncio.sleep(6 * 3600)
+                try:
+                    n = await asyncio.to_thread(storage.evict_cache)
+                    if n:
+                        log.info("已清理 %d 个本地缓存文件", n)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("清理本地缓存失败：%s", exc)
+
+        janitor = asyncio.create_task(clean_cache())
     yield
+    if janitor:
+        janitor.cancel()
 
 
 def create_app() -> FastAPI:
@@ -47,6 +68,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = (static_dir / full_path).resolve()
         if full_path and candidate.is_relative_to(static_dir.resolve()) and candidate.is_file():
+            if full_path == "sw.js":  # Service Worker 需要及时更新，并允许控制整个站点
+                return FileResponse(candidate, media_type="text/javascript",
+                                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+            if full_path.endswith(".webmanifest"):
+                return FileResponse(candidate, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
             return FileResponse(candidate)
         if index.is_file():
             return FileResponse(index, headers={"Cache-Control": "no-cache"})

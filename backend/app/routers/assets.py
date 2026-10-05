@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..models import Asset, Board, User
-from ..services.media import delete_media, ensure_thumb, image_size, media_path, save_media
+from ..services.media import delete_media, ensure_thumb, image_size, local_media, save_media
 
 router = APIRouter(tags=["assets"])
 
@@ -246,7 +246,7 @@ def download_zip(ids: str, background: BackgroundTasks, db: Session = Depends(ge
     os.close(fd)
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
         for a in rows:
-            path = media_path(a.filename)
+            path = local_media(a.filename)
             if path.is_file():
                 zf.write(path, f"pwd-{a.id}{path.suffix}")
     background.add_task(os.remove, tmp)
@@ -266,7 +266,7 @@ def media(path: str, db: Session = Depends(get_db), user: User = Depends(current
 
 def _serve_media(path: str):
     try:
-        target = media_path(path)
+        target = local_media(path)
     except ValueError:
         target = None
     if target is None or not target.is_file():

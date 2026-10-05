@@ -41,6 +41,16 @@ def media_path(filename: str) -> Path:
     return target
 
 
+def local_media(filename: str) -> Path:
+    """返回本地文件路径；启用对象存储且本地缓存缺失时先从对象存储下载。"""
+    path = media_path(filename)
+    if not path.is_file():
+        from . import storage
+
+        storage.fetch_to(filename, path)
+    return path
+
+
 def thumbs_dir() -> Path:
     return settings.data_dir / "thumbs"
 
@@ -62,6 +72,9 @@ def save_media(data: bytes, mime: str) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     name = f"{uuid.uuid4().hex}{_ext(mime)}"
     (folder / name).write_bytes(data)
+    from . import storage
+
+    storage.upload_later(f"{sub}/{name}", folder / name, mime)
     return f"{sub}/{name}"
 
 
@@ -72,6 +85,9 @@ def delete_media(filename: str) -> None:
                 path.unlink()
         except (OSError, ValueError):
             pass
+    from . import storage
+
+    storage.delete_later(filename)
 
 
 def thumb_path(filename: str) -> Path:
@@ -87,7 +103,7 @@ def ensure_thumb(filename: str) -> Path | None:
     target = thumb_path(filename)
     if target.is_file():
         return target
-    src = media_path(filename)
+    src = local_media(filename)
     if not src.is_file():
         return None
     try:
@@ -107,7 +123,7 @@ def ensure_thumb(filename: str) -> Path | None:
 
 
 def read_media(filename: str) -> bytes:
-    return media_path(filename).read_bytes()
+    return local_media(filename).read_bytes()
 
 
 def to_data_uri(data: bytes, mime: str) -> str:

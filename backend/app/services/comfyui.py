@@ -132,6 +132,7 @@ async def generate(
     timeout: float = 3600,
     uploads: dict[str, tuple[bytes, str]] | None = None,
     overrides: dict[str, Any] | None = None,
+    resume_id: str | None = None,
 ) -> list[tuple[bytes, str]]:
     """uploads：额外需要上传的图片，键为占位符名（如 image / mask）；overrides：覆盖占位符取值。"""
     workflows = (provider.extra or {}).get("workflows") or {}
@@ -145,34 +146,37 @@ async def generate(
         files_to_upload["image"] = references[0]
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        values.setdefault("image", "")
-        values.setdefault("mask", "")
-        for key, (data, mime) in files_to_upload.items():
-            up = await client.post(
-                f"{_base(provider)}/upload/image",
-                files={"image": (f"pwd_{key}_{uuid.uuid4().hex[:8]}.png", data, mime)},
-                data={"overwrite": "true"},
+        if resume_id:
+            prompt_id = resume_id  # 服务重启后继续等待已提交的工作流
+        else:
+            values.setdefault("image", "")
+            values.setdefault("mask", "")
+            for key, (data, mime) in files_to_upload.items():
+                up = await client.post(
+                    f"{_base(provider)}/upload/image",
+                    files={"image": (f"pwd_{key}_{uuid.uuid4().hex[:8]}.png", data, mime)},
+                    data={"overwrite": "true"},
+                    headers=_headers(provider),
+                )
+                if up.status_code >= 400:
+                    raise ProviderError(f"上传图片到 ComfyUI 失败（HTTP {up.status_code}）", up.status_code)
+                info = up.json()
+                values[key] = f"{info['subfolder']}/{info['name']}" if info.get("subfolder") else info["name"]
+            if not values["image"] and _uses_placeholder(workflow, "image"):
+                raise ProviderError("该工作流需要参考图（包含 {{image}} 占位符），请先选择参考图")
+            if not values["mask"] and _uses_placeholder(workflow, "mask"):
+                raise ProviderError("该工作流需要蒙版（包含 {{mask}} 占位符），请在局部重绘中使用")
+            graph = fill_workflow(workflow, values)
+            resp = await client.post(
+                f"{_base(provider)}/prompt",
+                json={"prompt": graph, "client_id": uuid.uuid4().hex},
                 headers=_headers(provider),
             )
-            if up.status_code >= 400:
-                raise ProviderError(f"上传图片到 ComfyUI 失败（HTTP {up.status_code}）", up.status_code)
-            info = up.json()
-            values[key] = f"{info['subfolder']}/{info['name']}" if info.get("subfolder") else info["name"]
-        if not values["image"] and _uses_placeholder(workflow, "image"):
-            raise ProviderError("该工作流需要参考图（包含 {{image}} 占位符），请先选择参考图")
-        if not values["mask"] and _uses_placeholder(workflow, "mask"):
-            raise ProviderError("该工作流需要蒙版（包含 {{mask}} 占位符），请在局部重绘中使用")
-        graph = fill_workflow(workflow, values)
-        resp = await client.post(
-            f"{_base(provider)}/prompt",
-            json={"prompt": graph, "client_id": uuid.uuid4().hex},
-            headers=_headers(provider),
-        )
-        if resp.status_code >= 400:
-            raise ProviderError(f"提交 ComfyUI 工作流失败（HTTP {resp.status_code}）：{resp.text[:500]}", resp.status_code)
-        prompt_id = resp.json().get("prompt_id")
-        if not prompt_id:
-            raise ProviderError(f"ComfyUI 未返回 prompt_id：{resp.text[:300]}")
+            if resp.status_code >= 400:
+                raise ProviderError(f"提交 ComfyUI 工作流失败（HTTP {resp.status_code}）：{resp.text[:500]}", resp.status_code)
+            prompt_id = resp.json().get("prompt_id")
+            if not prompt_id:
+                raise ProviderError(f"ComfyUI 未返回 prompt_id：{resp.text[:300]}")
 
         if on_progress:
             await on_progress(0, prompt_id)

@@ -26,6 +26,7 @@ ACTION_LABEL = {
     "provider.delete": "删除模型服务",
     "settings.update": "修改系统设置",
     "system.backup": "下载备份",
+    "system.storage_sync": "同步对象存储",
 }
 
 

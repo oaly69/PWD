@@ -174,3 +174,50 @@ def test_project_isolation(installed):
     assert c.get("/api/projects").json() == []
     assert c.get(f"/api/projects/{pid}").status_code == 404
     assert c.post(f"/api/projects/{pid}/render").status_code in (400, 404)
+
+
+def test_recover_tasks_after_restart(installed, monkeypatch):
+    """重启后：排队任务重新提交；已提交到远端的视频任务带着远端 ID 继续轮询；同步任务标记中断。"""
+    from app import db
+    from app.models import Task
+    from app.services import tasks as runner
+
+    c = installed
+    pid = c.get("/api/providers").json()[0]["id"]
+    with db.new_session() as s:
+        uid = 1
+        s.add_all([
+            Task(user_id=uid, kind="image", status="pending", provider_id=pid, model="image-model", prompt="排队中", params={}),
+            Task(user_id=uid, kind="video", status="running", provider_id=pid, model="v", prompt="视频", params={}, external_id="job_9"),
+            Task(user_id=uid, kind="image", status="running", provider_id=pid, model="image-model", prompt="执行中", params={}),
+        ])
+        s.commit()
+    resumed = runner.recover_interrupted()
+    with db.new_session() as s:
+        rows = {t.prompt: t for t in s.query(Task).all()}
+        assert rows["排队中"].id in resumed and rows["视频"].id in resumed
+        assert rows["执行中"].status == "failed" and "中断" in rows["执行中"].error
+
+    seen = {}
+
+    async def fake_video(provider, model, prompt, params, reference, on_progress, resume_id=None):
+        seen["resume"] = resume_id
+        out = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=5", "-t", "1",
+                              "-pix_fmt", "yuv420p", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov", "pipe:1"], capture_output=True)
+        return [(out.stdout or b"x", "video/mp4")]
+
+    async def fake_images(provider, model, prompt, params, refs=None):
+        return [(_png(), "image/png")]
+
+    monkeypatch.setattr(openai_compat, "generate_video", fake_video)
+    monkeypatch.setattr(openai_compat, "generate_images", fake_images)
+    import asyncio
+
+    async def run_all():
+        await asyncio.gather(*(runner._run(t) for t in resumed))
+
+    asyncio.run(run_all())
+    assert seen["resume"] == "job_9"
+    with db.new_session() as s:
+        rows = {t.prompt: t for t in s.query(Task).all()}
+        assert rows["排队中"].status == "succeeded" and rows["视频"].status == "succeeded"
