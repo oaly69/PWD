@@ -18,8 +18,18 @@ THUMB_SIZE = 512
 _EXT_FIX = {".jpe": ".jpg", ".jpeg": ".jpg"}
 
 
+# 部分系统的 mimetypes 不认识这些类型，显式指定扩展名
+_MIME_EXT = {
+    "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+    "audio/ogg": ".ogg", "audio/opus": ".opus", "audio/aac": ".aac", "audio/flac": ".flac", "audio/webm": ".webm",
+    "audio/mp4": ".m4a", "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov", "image/webp": ".webp",
+    "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+}
+
+
 def _ext(mime: str) -> str:
-    ext = mimetypes.guess_extension(mime) or ".bin"
+    mime = (mime or "").split(";")[0].strip().lower()
+    ext = _MIME_EXT.get(mime) or mimetypes.guess_extension(mime) or ".bin"
     return _EXT_FIX.get(ext, ext)
 
 

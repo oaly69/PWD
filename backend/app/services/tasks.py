@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 from ..db import new_session
-from ..models import Asset, Provider, Task, utcnow
+from ..models import Asset, Project, ProjectElement, Provider, Shot, Task, utcnow
 from . import comfyui, failover, imageops, openai_compat, policy
 from .media import image_size, read_media, save_media
 from .openai_compat import ProviderError
@@ -13,7 +13,7 @@ from .openai_compat import ProviderError
 log = logging.getLogger("pwd.tasks")
 
 # 不同类型任务各自的并发上限：视频任务耗时长，不应阻塞图像任务
-CONCURRENCY = {"image": 3, "video": 2, "tts": 3}
+CONCURRENCY = {"image": 3, "video": 2, "tts": 3, "render": 1}
 _semaphores: dict[str, asyncio.Semaphore] = {}
 _running: dict[int, asyncio.Task] = {}
 
@@ -124,6 +124,57 @@ async def _execute_op(db, task: Task, provider: Provider | None, prompt: str, pa
     raise ProviderError(f"未知的编辑操作：{op}")
 
 
+async def _render_project(db, task: Task, on_progress) -> list[tuple[bytes, str]]:
+    from . import render
+
+    project = db.get(Project, int((task.params or {}).get("project_id") or 0))
+    if project is None:
+        raise ProviderError("项目不存在")
+    rows = db.query(Shot).filter(Shot.project_id == project.id).order_by(Shot.idx, Shot.id).all()
+    files = {a.id: a.filename for a in db.query(Asset).filter(Asset.user_id == task.user_id).all()}
+    shots = [
+        {
+            "video": files.get(s.video_asset_id), "image": files.get(s.keyframe_asset_id), "audio": files.get(s.audio_asset_id),
+            "duration": s.duration, "dialogue": s.dialogue if (project.settings or {}).get("subtitles", True) else "",
+        }
+        for s in rows
+    ]
+    data, srt = await render.render(shots, project.aspect, lambda p: on_progress(p))
+    project.settings = {**(project.settings or {}), "srt": srt}
+    return [(data, "video/mp4")]
+
+
+def _valid_board(db, task: Task) -> int | None:
+    from ..models import Board
+
+    bid = (task.params or {}).get("board_id")
+    board = db.get(Board, int(bid)) if bid else None
+    return board.id if board is not None and board.user_id == task.user_id else None
+
+
+def _link_outputs(db, task: Task, assets: list[Asset]) -> None:
+    """把生成结果关联回短片项目的镜头 / 角色 / 成片。"""
+    params = task.params or {}
+    if not assets:
+        return
+    first = assets[0]
+    if params.get("shot_id"):
+        shot = db.get(Shot, int(params["shot_id"]))
+        slot = params.get("slot")
+        if shot is not None and slot in ("keyframe", "video", "audio"):
+            setattr(shot, f"{slot}_asset_id", first.id)
+            shot.tasks = {k: v for k, v in (shot.tasks or {}).items() if v != task.id}
+    if params.get("element_id"):
+        el = db.get(ProjectElement, int(params["element_id"]))
+        if el is not None:
+            el.ref_asset_id = first.id
+            el.task_id = None
+    if task.kind == "render" and params.get("project_id"):
+        project = db.get(Project, int(params["project_id"]))
+        if project is not None:
+            project.output_asset_id = first.id
+
+
 async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[bytes, str]]:
     prompt, params = effective_prompt(task)
 
@@ -138,6 +189,8 @@ async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[byte
         if changed:
             db.commit()
 
+    if task.kind == "render":
+        return await _render_project(db, task, on_progress)
     if params.get("op"):
         return await _execute_op(db, task, provider, prompt, params, on_progress)
     assert provider is not None
@@ -187,17 +240,23 @@ async def _run(task_id: int) -> None:
                 provider = db.get(Provider, task.provider_id) if task.provider_id else None
                 task.status = "running"
                 db.commit()
-                if provider is None and not (task.params or {}).get("op"):
+                if provider is None and not (task.params or {}).get("op") and task.kind != "render":
                     raise ProviderError("模型服务不存在或已被删除")
                 outputs, served = await _execute_with_failover(db, task, provider)
+                created: list[Asset] = []
                 for data, mime in outputs:
                     filename = save_media(data, mime)
                     kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else task.kind
                     w, h = image_size(data) if kind == "image" else (0, 0)
-                    db.add(Asset(
+                    asset = Asset(
                         user_id=task.user_id, kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
                         width=w, height=h, prompt=task.prompt, model=task.model, task_id=task.id,
-                    ))
+                        board_id=_valid_board(db, task),
+                    )
+                    db.add(asset)
+                    created.append(asset)
+                db.flush()
+                _link_outputs(db, task, created)
                 if served is not None:  # 本地放大不计入用量
                     policy.record_usage(db, task.user_id, task.kind, served.id, task.model, max(1, len(outputs)))
                 task.status = "succeeded"

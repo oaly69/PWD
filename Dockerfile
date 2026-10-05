@@ -21,6 +21,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PWD_STATIC_DIR=/app/frontend/dist \
     TZ=Asia/Shanghai
 
+# FFmpeg：短片项目合成成片；tzdata：按本地时区统计每日用量
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt

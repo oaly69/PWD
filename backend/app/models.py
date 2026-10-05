@@ -259,6 +259,61 @@ class KbChunk(Base):
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)  # float32 向量
 
 
+class Project(Base):
+    """短片项目：剧本 → 角色与场景 → 分镜 → 关键帧 / 视频 / 配音 → 合成成片。"""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    synopsis: Mapped[str] = mapped_column(Text, default="")  # 故事梗概
+    script: Mapped[str] = mapped_column(Text, default="")  # 剧本
+    style: Mapped[str] = mapped_column(Text, default="")  # 统一视觉风格，追加到每个镜头的画面提示词
+    aspect: Mapped[str] = mapped_column(String(8), default="16:9")
+    # 各环节使用的模型、尺寸、音色等：chat / image / video / tts 的 provider_id 与 model，image_size、video_size、voice、use_refs
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProjectElement(Base):
+    """项目资产：角色 / 场景 / 道具，带固定参考图以保持多个镜头间的一致性。"""
+
+    __tablename__ = "project_elements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="character")  # character / scene / prop
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")  # 外观提示词
+    ref_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 正在生成参考图的任务
+
+
+class Shot(Base):
+    __tablename__ = "shots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    idx: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")  # 画面内容
+    camera: Mapped[str] = mapped_column(String(255), default="")  # 景别与运镜
+    dialogue: Mapped[str] = mapped_column(Text, default="")  # 台词 / 旁白（用于配音与字幕）
+    duration: Mapped[float] = mapped_column(default=4.0)
+    element_ids: Mapped[list] = mapped_column(JSON, default=list)  # 出场的角色 / 场景
+    image_prompt: Mapped[str] = mapped_column(Text, default="")
+    video_prompt: Mapped[str] = mapped_column(Text, default="")
+    keyframe_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    video_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    audio_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    # 各环节正在进行的任务：{"keyframe": task_id, "video": ..., "audio": ...}
+    tasks: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class PromptTemplate(Base):
     __tablename__ = "prompts"
 

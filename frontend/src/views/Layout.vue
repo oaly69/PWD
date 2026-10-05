@@ -67,7 +67,7 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NButton, NDropdown, NLayout, NLayoutSider, NMenu } from 'naive-ui'
 import {
-  AudioLines, BookText, ChevronDown, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LibraryBig, LogOut, Menu, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
+  AudioLines, BookText, ChevronDown, Clapperboard, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LibraryBig, LogOut, Menu, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
 } from 'lucide-vue-next'
 import TaskCenter from '../components/TaskCenter.vue'
 import { api } from '../api'
@@ -96,6 +96,7 @@ const menuOptions = computed(() => [
       { label: link('/image', '图像生成'), key: '/image', icon: icon(ImageIcon) },
       { label: link('/video', '视频生成'), key: '/video', icon: icon(Film) },
       { label: link('/speech', '语音合成'), key: '/speech', icon: icon(AudioLines) },
+      { label: link('/projects', '短片项目'), key: '/projects', icon: icon(Clapperboard) },
     ],
   },
   {
