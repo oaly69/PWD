@@ -50,6 +50,7 @@
 </template>
 
 <script setup>
+import { cnDateKey } from '../../utils/format'
 import { computed, onMounted, ref } from 'vue'
 import { NDataTable, NRadioButton, NRadioGroup } from 'naive-ui'
 import { AudioLines, Coins, Film, Image as ImageIcon, MessageSquare } from 'lucide-vue-next'
@@ -83,11 +84,10 @@ const series = computed(() => {
     map[d.date][d.kind] = d.units
   }
   const out = []
-  const now = new Date()
   for (let i = days.value - 1; i >= 0; i--) {
-    const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
-    const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-    out.push({ date: key, label: i % Math.ceil(days.value / 10) === 0 ? `${dt.getMonth() + 1}/${dt.getDate()}` : '', ...(map[key] || { chat: 0, image: 0, video: 0, tts: 0 }) })
+    const key = cnDateKey(new Date(), i)
+    const [, m, d] = key.split('-').map(Number)
+    out.push({ date: key, label: i % Math.ceil(days.value / 10) === 0 ? `${m}/${d}` : '', ...(map[key] || { chat: 0, image: 0, video: 0, tts: 0 }) })
   }
   return out
 })

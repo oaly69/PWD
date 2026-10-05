@@ -1,6 +1,33 @@
+// 全站统一使用 UTC+8（北京时间），与浏览器所在时区无关
+export const TIME_ZONE = 'Asia/Shanghai'
+const OFFSET = 8 * 3600_000
+const DAY = 86400_000
+
+/** UTC+8 下的日期分量（年、月、日、时），月份从 1 开始。 */
+export function cnParts(d = new Date()) {
+  const t = new Date(new Date(d).getTime() + OFFSET)
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate(), hour: t.getUTCHours() }
+}
+
+/** UTC+8 下的日期键 YYYY-MM-DD，daysAgo 可往前推。 */
+export function cnDateKey(d = new Date(), daysAgo = 0) {
+  const p = cnParts(new Date(d).getTime() - daysAgo * DAY)
+  return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`
+}
+
+/** UTC+8 当天 0 点的时间戳。 */
+export function cnDayStart(d = Date.now()) {
+  return Math.floor((new Date(d).getTime() + OFFSET) / DAY) * DAY - OFFSET
+}
+
 export function formatTime(iso) {
   if (!iso) return ''
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false })
+  return new Date(iso).toLocaleString('zh-CN', { hour12: false, timeZone: TIME_ZONE })
+}
+
+export function formatDate(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleDateString('zh-CN', { timeZone: TIME_ZONE })
 }
 
 export function relativeTime(iso) {
@@ -10,7 +37,7 @@ export function relativeTime(iso) {
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return formatDate(iso)
 }
 
 export function formatBytes(n) {
@@ -22,9 +49,8 @@ export function formatBytes(n) {
 
 /** 按「置顶 / 今天 / 昨天 / 7 天内 / 30 天内 / 更早」分组。 */
 export function groupByDate(items, key = 'updated_at') {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const day = 86400000
+  const start = cnDayStart()
+  const day = DAY
   const groups = [
     { label: '置顶', items: [] },
     { label: '今天', items: [] },

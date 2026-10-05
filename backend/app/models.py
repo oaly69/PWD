@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -11,6 +12,23 @@ from .db import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """统一按 UTC 存储；SQLite 不保存时区，读出时补回 UTC，避免被当作本地时间。"""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class Setting(Base):
@@ -32,8 +50,8 @@ class User(Base):
     # active 正常 / pending 待审核 / disabled 已禁用
     status: Mapped[str] = mapped_column(String(16), default="active")
     token_version: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("user_groups.id", ondelete="SET NULL"), nullable=True)
     totp_secret: Mapped[str] = mapped_column(String(64), default="")  # 非空表示已开启两步验证
     oidc_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
@@ -57,7 +75,7 @@ class UserGroup(Base):
     models: Mapped[dict] = mapped_column(JSON, default=dict)
     # 配额：chat_daily / image_daily / video_daily / tts_daily / tokens_monthly，0 或缺省表示不限制
     quotas: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class UsageLog(Base):
@@ -74,7 +92,7 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated: Mapped[bool] = mapped_column(Boolean, default=False)  # 服务未返回用量时按字数估算
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class AuditLog(Base):
@@ -89,7 +107,7 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(255), default="")
     detail: Mapped[str] = mapped_column(Text, default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class Provider(Base):
@@ -117,7 +135,7 @@ class Provider(Base):
     stt_models: Mapped[list] = mapped_column(JSON, default=list)  # 语音识别
     # 额外配置：ComfyUI 工作流、额外请求头等
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class Conversation(Base):
@@ -135,8 +153,8 @@ class Conversation(Base):
     current_leaf_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 模型参数：temperature / top_p / max_tokens / context_count
     params: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     messages: Mapped[list[Message]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan", order_by="Message.id"
@@ -156,7 +174,7 @@ class Message(Base):
     model: Mapped[str] = mapped_column(String(255), default="")
     # provider_id / compare_group（多模型对比批次）/ error（生成失败原因）
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
@@ -177,8 +195,8 @@ class Task(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     external_id: Mapped[str] = mapped_column(String(255), default="")  # 远端异步任务 ID
     progress: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
     assets: Mapped[list[Asset]] = relationship(back_populates="task")
 
@@ -202,7 +220,7 @@ class Asset(Base):
     favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     board_id: Mapped[int | None] = mapped_column(ForeignKey("boards.id", ondelete="SET NULL"), nullable=True, index=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     task: Mapped[Task | None] = relationship(back_populates="assets")
 
@@ -216,7 +234,7 @@ class Board(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(64))
     description: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class KnowledgeBase(Base):
@@ -231,7 +249,7 @@ class KnowledgeBase(Base):
     # 向量模型；为空时使用关键词检索
     embedding_provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(255), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class KbDocument(Base):
@@ -245,7 +263,7 @@ class KbDocument(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending / processing / ready / failed
     error: Mapped[str] = mapped_column(Text, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class KbChunk(Base):
@@ -274,8 +292,8 @@ class Project(Base):
     # 各环节使用的模型、尺寸、音色等：chat / image / video / tts 的 provider_id 与 model，image_size、video_size、voice、use_refs
     settings: Mapped[dict] = mapped_column(JSON, default=dict)
     output_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class ProjectElement(Base):
@@ -327,4 +345,4 @@ class PromptTemplate(Base):
     icon: Mapped[str] = mapped_column(String(16), default="")
     content: Mapped[str] = mapped_column(Text, default="")
     negative: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

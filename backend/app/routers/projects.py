@@ -16,6 +16,7 @@ from ..services import policy, storyboard
 from ..services import tasks as task_runner
 from ..services.openai_compat import ProviderError
 from ..site import get_setting
+from ..timeutil import iso
 from .assets import asset_out
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -44,8 +45,8 @@ def project_out(db: Session, p: Project, detail: bool = False) -> dict[str, Any]
     data: dict[str, Any] = {
         "id": p.id, "name": p.name, "synopsis": p.synopsis, "style": p.style, "aspect": p.aspect, "settings": settings,
         "shot_count": shots_q.count(), "has_srt": bool((p.settings or {}).get("srt")),
-        "created_at": p.created_at.isoformat() if p.created_at else None,
-        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        "created_at": iso(p.created_at),
+        "updated_at": iso(p.updated_at),
     }
     asset_ids: set[int] = set()
     shots = shots_q.order_by(Shot.idx, Shot.id).all() if detail else []

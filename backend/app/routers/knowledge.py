@@ -16,6 +16,7 @@ from ..services import tools as tools_svc
 from ..services.documents import SUPPORTED, extract_text
 from ..services.openai_compat import ProviderError
 from ..site import get_setting
+from ..timeutil import iso
 
 router = APIRouter(prefix="/api", tags=["knowledge"])
 
@@ -44,14 +45,14 @@ def kb_out(db: Session, kb: KnowledgeBase) -> dict[str, Any]:
         "embedding_provider_id": kb.embedding_provider_id, "embedding_model": kb.embedding_model,
         "embedding_label": f"{provider.name} · {kb.embedding_model}" if provider and kb.embedding_model else "",
         "documents": int(docs[0] or 0), "chunks": int(docs[1] or 0),
-        "created_at": kb.created_at.isoformat() if kb.created_at else None,
+        "created_at": iso(kb.created_at),
     }
 
 
 def doc_out(d: KbDocument) -> dict[str, Any]:
     return {
         "id": d.id, "kb_id": d.kb_id, "filename": d.filename, "size": d.size, "chars": d.chars, "status": d.status,
-        "error": d.error, "chunk_count": d.chunk_count, "created_at": d.created_at.isoformat() if d.created_at else None,
+        "error": d.error, "chunk_count": d.chunk_count, "created_at": iso(d.created_at),
     }
 
 

@@ -100,7 +100,7 @@ import EmptyState from '../components/EmptyState.vue'
 import MediaViewer from '../components/MediaViewer.vue'
 import { api } from '../api'
 import { store } from '../store'
-import { formatBytes, relativeTime } from '../utils/format'
+import { cnParts, formatBytes, relativeTime } from '../utils/format'
 
 const MODES = [
   { key: 'chat', label: '对话', icon: MessageSquare, placeholder: '问点什么，或让 AI 帮你写点什么…', to: '/chat' },
@@ -124,7 +124,7 @@ const viewer = ref(-1)
 
 const current = computed(() => MODES.find((m) => m.key === mode.value))
 const greeting = computed(() => {
-  const h = new Date().getHours()
+  const h = cnParts().hour
   return h < 6 ? '夜深了' : h < 11 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好'
 })
 const maxDaily = computed(() => Math.max(1, ...(stats.value?.daily || []).map((d) => d.count)))

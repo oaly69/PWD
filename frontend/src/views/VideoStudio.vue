@@ -7,8 +7,13 @@
     </div>
 
     <div class="block">
-      <div class="field-label">提示词</div>
-      <PromptInput v-model="form.prompt" kind="video" placeholder="描述画面中的主体、动作、镜头运动与氛围。例如：镜头缓慢推近，一只白鹭从晨雾笼罩的湖面起飞，水面泛起涟漪" @submit="generate" />
+      <div class="field-label">
+        提示词
+        <span class="spacer" />
+        <ModeSwitch v-model="batch" />
+      </div>
+      <BatchPromptInput v-if="batch" v-model="batchText" v-model:split="batchSplit" kind="video" :placeholder="BATCH_PLACEHOLDER" @submit="generate" />
+      <PromptInput v-else v-model="form.prompt" kind="video" placeholder="描述画面中的主体、动作、镜头运动与氛围。例如：镜头缓慢推近，一只白鹭从晨雾笼罩的湖面起飞，水面泛起涟漪" @submit="generate" />
     </div>
 
     <div class="block">
@@ -40,7 +45,10 @@
     </n-collapse>
 
     <template #footer>
-      <n-button type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !form.prompt.trim()" @click="generate">
+      <n-button v-if="batch" type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !batchPrompts.length || batchPrompts.length > MAX_BATCH" @click="generate">
+        <template #icon><Layers :size="18" /></template>批量生成 {{ batchPrompts.length }} 个视频
+      </n-button>
+      <n-button v-else type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !form.prompt.trim()" @click="generate">
         <template #icon><Sparkles :size="18" /></template>生成视频
       </n-button>
       <div class="muted foot-hint">视频生成通常需要 1～10 分钟，可离开页面，完成后会通知你</div>
@@ -55,7 +63,9 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NInput, NInputNumber, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
-import { Film, Sparkles } from 'lucide-vue-next'
+import { Film, Layers, Sparkles } from 'lucide-vue-next'
+import BatchPromptInput from '../components/BatchPromptInput.vue'
+import ModeSwitch from '../components/ModeSwitch.vue'
 import ModelSelect from '../components/ModelSelect.vue'
 import PromptInput from '../components/PromptInput.vue'
 import ReferenceImages from '../components/ReferenceImages.vue'
@@ -64,13 +74,21 @@ import TaskFeed from '../components/TaskFeed.vue'
 import { api, toast } from '../api'
 import { VIDEO_SIZES } from '../constants'
 import { useStudio } from '../composables/studio'
+import { useLocalRef } from '../composables/localRef'
+import { MAX_BATCH, parseBatch } from '../utils/batch'
 
 const form = reactive({ prompt: '', negative_prompt: '', size: '1280x720', seconds: 5, seed: null })
 const refs = ref([])
 const extraText = ref('')
 const feed = ref(null)
+const BATCH_PLACEHOLDER = '每行一条提示词，例如：\n镜头缓慢推近，白鹭从晨雾中的湖面起飞\n航拍镜头掠过金色麦田，夕阳逆光\n{雨夜|黄昏}的城市街头，霓虹倒映在积水中'
+const batch = useLocalRef('pwd.batch.video', false)
+const batchText = ref('')
+const batchSplit = useLocalRef('pwd.batch.video.split', 'line')
+const batchPrompts = computed(() => parseBatch(batchText.value, batchSplit.value))
 
 function applyParams(prompt, params, providerId, model) {
+  batch.value = false
   form.prompt = prompt || ''
   form.negative_prompt = params.negative_prompt || ''
   form.size = params.size || form.size
@@ -83,10 +101,10 @@ function applyParams(prompt, params, providerId, model) {
   if (id) api.get(`/api/assets/${id}`, { silent: true }).then((a) => { refs.value = [a] }).catch(() => {})
 }
 
-const { modelKey, submitting, submit, currentProvider } = useStudio('video', {
+const { modelKey, submitting, submit, submitBatch, currentProvider } = useStudio('video', {
   onRef: (a) => { refs.value = [a]; toast('已设为首帧参考图', 'success') },
   onAsset: (a) => applyParams(a.prompt, a.params || {}, a.provider_id, a.model),
-  onPrompt: (p) => { form.prompt = p },
+  onPrompt: (p) => { batch.value = false; form.prompt = p },
 })
 
 const apiHint = computed(() => {
@@ -102,7 +120,9 @@ function reuse(t) {
 }
 
 async function generate() {
-  if (!modelKey.value || !form.prompt.trim() || submitting.value) return
+  if (!modelKey.value || submitting.value) return
+  if (batch.value ? !batchPrompts.value.length : !form.prompt.trim()) return
+  if (batch.value && batchPrompts.value.length > MAX_BATCH) return toast(`单次最多 ${MAX_BATCH} 条提示词`, 'warning')
   let extra_body = null
   if (extraText.value.trim()) {
     try {
@@ -111,7 +131,7 @@ async function generate() {
       return toast('额外请求参数不是合法的 JSON', 'error')
     }
   }
-  const task = await submit({
+  const body = {
     prompt: form.prompt.trim(),
     negative_prompt: form.negative_prompt,
     size: form.size,
@@ -119,7 +139,14 @@ async function generate() {
     seed: form.seed,
     reference_asset_ids: refs.value.map((r) => r.id),
     extra_body,
-  })
+  }
+  if (batch.value) {
+    const r = await submitBatch(batchPrompts.value, body)
+    for (const t of [...r.tasks].reverse()) feed.value?.add(t)
+    toast(`已提交 ${r.tasks.length} 个视频任务，将按队列依次生成，完成后会通知你`, 'success')
+    return
+  }
+  const task = await submit(body)
   feed.value?.add(task)
   toast('任务已提交，生成完成后会通知你', 'success')
 }
@@ -127,6 +154,7 @@ async function generate() {
 
 <style scoped>
 .hint { font-weight: 400; font-size: 12px; }
+.block > .field-label { display: flex; align-items: center; }
 .hint-line { font-size: 12px; margin-top: 6px; }
 .seg { display: flex; }
 .seg :deep(.n-radio-button) { flex: 1; text-align: center; }

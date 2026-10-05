@@ -18,7 +18,7 @@
 import { defineComponent } from 'vue'
 import {
   NConfigProvider, NDialogProvider, NGlobalStyle, NLoadingBarProvider, NMessageProvider, NNotificationProvider,
-  dateZhCN, useDialog, useMessage, useNotification, zhCN,
+  dateZhCN, useDialog, useLoadingBar, useMessage, useNotification, zhCN,
 } from 'naive-ui'
 import { naiveTheme, themeOverrides } from './composables/theme'
 import { ui } from './api'
@@ -28,6 +28,7 @@ const UiBridge = defineComponent({
     ui.message = useMessage()
     ui.dialog = useDialog()
     ui.notification = useNotification()
+    ui.loadingBar = useLoadingBar()
     return () => null
   },
 })

@@ -6,9 +6,9 @@ import io
 import logging
 import mimetypes
 import uuid
-from datetime import datetime
 from pathlib import Path
 
+from .. import timeutil
 from ..config import settings
 
 log = logging.getLogger("pwd.media")
@@ -67,7 +67,7 @@ def image_size(data: bytes) -> tuple[int, int]:
 
 def save_media(data: bytes, mime: str) -> str:
     """保存文件到 media 目录，返回相对文件名（按月份分目录）。"""
-    sub = datetime.now().strftime("%Y%m")
+    sub = timeutil.now().strftime("%Y%m")
     folder = settings.media_dir / sub
     folder.mkdir(parents=True, exist_ok=True)
     name = f"{uuid.uuid4().hex}{_ext(mime)}"
