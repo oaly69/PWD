@@ -7,7 +7,7 @@ import zipfile
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -17,7 +17,8 @@ from .. import db as dbmod
 from ..db import get_db
 from ..deps import current_user, require_admin
 from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User, utcnow
-from ..site import EDITABLE_KEYS, PUBLIC_KEYS, all_settings, set_setting
+from ..site import EDITABLE_KEYS, PUBLIC_KEYS, SECRET_KEYS, all_settings, set_setting
+from ..services.audit import audit
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -33,24 +34,33 @@ def site_info(db: Session = Depends(get_db)):
     return {k: data[k] for k in PUBLIC_KEYS} | {"version": VERSION}
 
 
+def _settings_out(db: Session) -> dict[str, Any]:
+    data = all_settings(db)
+    out = {k: v for k, v in data.items() if k in EDITABLE_KEYS and k not in SECRET_KEYS}
+    for k in SECRET_KEYS:
+        out[f"{k}_set"] = bool(data.get(k))
+    return out
+
+
 @router.get("/settings", dependencies=[Depends(current_user)])
 def get_settings(db: Session = Depends(get_db)):
-    data = all_settings(db)
-    return {k: v for k, v in data.items() if k in EDITABLE_KEYS}
+    return _settings_out(db)
 
 
-@router.put("/settings", dependencies=[Depends(require_admin)])
-def update_settings(body: dict[str, Any], db: Session = Depends(get_db)):
+@router.put("/settings")
+def update_settings(body: dict[str, Any], request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     unknown = set(body) - EDITABLE_KEYS
     if unknown:
         raise HTTPException(status_code=422, detail=f"不支持的设置项：{', '.join(sorted(unknown))}")
     if "site_name" in body and not str(body["site_name"] or "").strip():
         raise HTTPException(status_code=422, detail="站点名称不能为空")
     for key, value in body.items():
+        if key in SECRET_KEYS and not value:
+            continue  # 留空表示保持不变
         set_setting(db, key, value)
+    audit(db, user, "settings.update", detail=", ".join(sorted(body)), request=request)
     db.commit()
-    data = all_settings(db)
-    return {k: v for k, v in data.items() if k in EDITABLE_KEYS}
+    return _settings_out(db)
 
 
 def _dir_size(path) -> int:
@@ -107,9 +117,12 @@ def stats(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return data
 
 
-@router.get("/system/backup", dependencies=[Depends(require_admin)])
-def backup(background: BackgroundTasks, include_media: bool = True):
+@router.get("/system/backup")
+def backup(background: BackgroundTasks, request: Request, include_media: bool = True,
+           db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """导出完整备份：数据库快照 + 会话密钥 +（可选）全部媒体文件。"""
+    audit(db, user, "system.backup", detail="含媒体文件" if include_media else "仅数据库", request=request)
+    db.commit()
     tmpdir = tempfile.mkdtemp(prefix="pwd-backup-")
     db_copy = os.path.join(tmpdir, "pwd.db")
     src = sqlite3.connect(dbmod.engine.url.database or str(settings.db_path))

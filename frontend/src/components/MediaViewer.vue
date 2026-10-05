@@ -35,6 +35,7 @@
             <div class="label">信息</div>
             <dl class="meta">
               <template v-if="current.model"><dt>模型</dt><dd>{{ current.model }}</dd></template>
+              <template v-if="current.params?.served_by"><dt>实际服务</dt><dd>{{ current.params.served_by }}（自动切换）</dd></template>
               <template v-if="current.width"><dt>分辨率</dt><dd>{{ current.width }} × {{ current.height }}</dd></template>
               <template v-if="current.params?.style"><dt>风格</dt><dd>{{ current.params.style }}</dd></template>
               <template v-if="current.params?.seed != null"><dt>种子</dt><dd>{{ current.params.seed }}</dd></template>

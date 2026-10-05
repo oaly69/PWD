@@ -188,7 +188,7 @@ def test_all_api_routes_require_login(client):
     client.cookies.clear()
     public = {"/api/health", "/api/site", "/api/install/status", "/api/install", "/api/install/test-provider",
               "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/openapi.json", "/api/docs",
-              "/api/docs/oauth2-redirect"}
+              "/api/docs/oauth2-redirect", "/api/auth/oidc/login", "/api/auth/oidc/callback"}
     checked = 0
     schema = client.get("/api/openapi.json").json()
     for path, ops in schema["paths"].items():

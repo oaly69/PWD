@@ -6,12 +6,25 @@
         <div class="sub">共 {{ users.length }} 个用户<template v-if="pendingCount"> · <b class="pending">{{ pendingCount }} 个待审核</b></template></div>
       </div>
       <span class="spacer" />
-      <n-input v-model:value="q" clearable placeholder="搜索用户名" style="width: 200px">
-        <template #prefix><Search :size="14" /></template>
-      </n-input>
-      <n-button type="primary" @click="openCreate"><template #icon><UserPlus :size="16" /></template>添加用户</n-button>
+      <template v-if="tab === 'users'">
+        <n-input v-model:value="q" clearable placeholder="搜索用户名" style="width: 200px">
+          <template #prefix><Search :size="14" /></template>
+        </n-input>
+        <n-button type="primary" @click="openCreate"><template #icon><UserPlus :size="16" /></template>添加用户</n-button>
+      </template>
     </div>
 
+    <n-tabs v-model:value="tab" type="line" class="tabs">
+      <n-tab name="users">用户</n-tab>
+      <n-tab name="groups">用户组</n-tab>
+      <n-tab name="usage">用量统计</n-tab>
+      <n-tab name="audit">操作日志</n-tab>
+    </n-tabs>
+
+    <UserGroups v-if="tab === 'groups'" @changed="(g) => (groups = g)" />
+    <UsageReport v-else-if="tab === 'usage'" />
+    <AuditLogs v-else-if="tab === 'audit'" />
+    <template v-else>
     <div class="reg-card">
       <div class="reg-item">
         <div>
@@ -29,7 +42,8 @@
       </div>
     </div>
 
-    <n-data-table :columns="columns" :data="filtered" :loading="loading" :bordered="false" :row-key="(r) => r.id" :scroll-x="900" class="table" />
+    <n-data-table :columns="columns" :data="filtered" :loading="loading" :bordered="false" :row-key="(r) => r.id" :scroll-x="1000" class="table" />
+    </template>
 
     <n-modal v-model:show="showCreate" preset="card" title="添加用户" style="width: min(440px, 94vw)">
       <n-form label-placement="top">
@@ -40,6 +54,9 @@
             <n-radio-button value="user">普通用户</n-radio-button>
             <n-radio-button value="admin">管理员</n-radio-button>
           </n-radio-group>
+        </n-form-item>
+        <n-form-item v-if="form.role === 'user'" label="用户组">
+          <n-select v-model:value="form.group_id" :options="groupOptions" clearable placeholder="不限制" />
         </n-form-item>
       </n-form>
       <template #footer>
@@ -59,8 +76,11 @@
 
 <script setup>
 import { computed, h, onMounted, reactive, ref } from 'vue'
-import { NButton, NDataTable, NDropdown, NForm, NFormItem, NInput, NModal, NRadioButton, NRadioGroup, NSwitch, NTag } from 'naive-ui'
-import { Ellipsis, Search, UserPlus } from 'lucide-vue-next'
+import { NButton, NDataTable, NDropdown, NForm, NFormItem, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSwitch, NTab, NTabs, NTag } from 'naive-ui'
+import { Ellipsis, Search, ShieldCheck, UserPlus } from 'lucide-vue-next'
+import AuditLogs from '../components/admin/AuditLogs.vue'
+import UsageReport from '../components/admin/UsageReport.vue'
+import UserGroups from '../components/admin/UserGroups.vue'
 import { api, confirmDialog, toast } from '../api'
 import { loadSettings, store } from '../store'
 import { formatBytes, relativeTime } from '../utils/format'
@@ -72,7 +92,11 @@ const loading = ref(false)
 const q = ref('')
 const reg = reactive({ allow_register: false, register_need_approval: true })
 const showCreate = ref(false)
-const form = reactive({ username: '', password: '', role: 'user' })
+const form = reactive({ username: '', password: '', role: 'user', group_id: null })
+const tab = ref('users')
+const groups = ref([])
+const groupOptions = computed(() => groups.value.map((g) => ({ label: g.name, value: g.id })))
+const groupName = (id) => groups.value.find((g) => g.id === id)?.name
 const showReset = ref(false)
 const resetUser = ref(null)
 const newPassword = ref('')
@@ -94,7 +118,11 @@ const columns = [
     render: (u) => h('div', { class: 'user-cell' }, [
       h('span', { class: 'avatar' }, u.username.slice(0, 1).toUpperCase()),
       h('div', [
-        h('div', { class: 'uname' }, [u.username, u.id === store.user?.id ? h('span', { class: 'me' }, '（我）') : null]),
+        h('div', { class: 'uname' }, [
+          u.username,
+          u.id === store.user?.id ? h('span', { class: 'me' }, '（我）') : null,
+          u.totp_enabled ? h('span', { class: 'badge-2fa', title: '已开启两步验证' }, [h(ShieldCheck, { size: 13 })]) : null,
+        ]),
         h('div', { class: 'muted small' }, `注册于 ${new Date(u.created_at).toLocaleDateString('zh-CN')}`),
       ]),
     ]),
@@ -104,6 +132,12 @@ const columns = [
     key: 'role',
     width: 100,
     render: (u) => h(NTag, { size: 'small', bordered: false, type: u.is_admin ? 'primary' : 'default' }, () => (u.is_admin ? '管理员' : '普通用户')),
+  },
+  {
+    title: '用户组',
+    key: 'group_id',
+    width: 110,
+    render: (u) => (u.is_admin ? h('span', { class: 'muted' }, '—') : groupName(u.group_id) || h('span', { class: 'muted' }, '不限制')),
   },
   {
     title: '状态',
@@ -136,13 +170,24 @@ function menu(u) {
     u.status === 'disabled'
       ? { label: '启用账号', key: 'enable' }
       : { label: '禁用账号', key: 'disable', disabled: self },
+    ...(!u.is_admin && groups.value.length
+      ? [{ label: '设置用户组', key: 'group', children: [{ label: '不限制', key: 'group:0' }, ...groups.value.map((g) => ({ label: g.name, key: `group:${g.id}` }))] }]
+      : []),
     { label: '重置密码', key: 'reset' },
+    ...(u.totp_enabled ? [{ label: '重置两步验证', key: 'reset2fa' }] : []),
     { type: 'divider', key: 'd' },
     { label: '删除用户', key: 'delete', disabled: self },
   ]
 }
 
 async function onMenu(key, u) {
+  if (String(key).startsWith('group:')) return patch(u, { group_id: Number(key.slice(6)) }, '用户组已更新')
+  if (key === 'reset2fa') {
+    if (await confirmDialog({ title: '重置两步验证', content: `将关闭「${u.username}」的两步验证，用户可仅凭密码登录后重新设置。`, positiveText: '重置' })) {
+      await patch(u, { reset_2fa: true }, '已重置两步验证')
+    }
+    return
+  }
   if (key === 'role') await patch(u, { role: u.is_admin ? 'user' : 'admin' }, '角色已更新')
   else if (key === 'enable') await patch(u, { status: 'active' }, '已启用')
   else if (key === 'disable') {
@@ -180,12 +225,12 @@ async function doReset() {
 }
 
 function openCreate() {
-  Object.assign(form, { username: '', password: '', role: 'user' })
+  Object.assign(form, { username: '', password: '', role: 'user', group_id: store.settings?.default_group_id ?? null })
   showCreate.value = true
 }
 
 async function create() {
-  await api.post('/api/users', { ...form })
+  await api.post('/api/users', { ...form, group_id: form.role === 'user' ? form.group_id : null })
   showCreate.value = false
   toast('用户已创建', 'success')
   load()
@@ -210,11 +255,14 @@ onMounted(async () => {
   const s = await loadSettings(true)
   Object.assign(reg, { allow_register: !!s.allow_register, register_need_approval: s.register_need_approval !== false })
   load()
+  groups.value = await api.get('/api/groups').catch(() => [])
 })
 </script>
 
 <style scoped>
 .pending { color: var(--warning); }
+.tabs { margin-bottom: 16px; }
+.table :deep(.badge-2fa) { color: var(--success); margin-left: 6px; display: inline-flex; vertical-align: -2px; }
 .reg-card { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 18px; }
 .reg-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; background: var(--panel); }
 .reg-item.disabled { opacity: .55; }

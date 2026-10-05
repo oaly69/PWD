@@ -23,10 +23,22 @@ DEFAULTS: dict[str, Any] = {
     "default_system_prompt": "",
     "allow_register": False,  # 是否开放注册
     "register_need_approval": True,  # 注册后是否需要管理员审核
+    "default_group_id": None,  # 新注册用户默认加入的用户组
+    "failover_enabled": True,  # 请求失败时自动切换到提供同名模型的其他服务
+    "public_url": "",  # 站点对外访问地址（用于单点登录回调），为空时根据请求自动推断
+    # OIDC 单点登录（Authentik / Keycloak / Logto / Casdoor 等）
+    "oidc_enabled": False,
+    "oidc_issuer": "",
+    "oidc_client_id": "",
+    "oidc_client_secret": "",
+    "oidc_scopes": "openid profile email",
+    "oidc_button_text": "使用单点登录",
+    "oidc_auto_create": True,  # 首次登录自动创建账号（是否需要审核沿用注册审核设置）
 }
 
-PUBLIC_KEYS = {"site_name", "installed", "allow_register"}
+PUBLIC_KEYS = {"site_name", "installed", "allow_register", "oidc_enabled", "oidc_button_text"}
 EDITABLE_KEYS = set(DEFAULTS) - {"installed"}
+SECRET_KEYS = {"oidc_client_secret"}  # 读取设置时不返回明文
 
 
 def get_setting(db: Session, key: str) -> Any:

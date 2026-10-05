@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db, new_session
 from ..deps import current_user
 from ..models import Asset, Conversation, Message, Provider, User, utcnow
-from ..services import openai_compat
+from ..services import failover, openai_compat, policy
 from ..services.media import downscale_for_llm, read_media, to_data_uri
 from ..site import get_setting
 from .assets import asset_out
@@ -37,6 +37,7 @@ def msg_out(m: Message, assets: dict[int, Asset]) -> dict[str, Any]:
         "provider_id": meta.get("provider_id"),
         "compare_group": meta.get("compare_group") or "",
         "error": meta.get("error") or "",
+        "served_by": meta.get("served_by") or "",
         "attachments": [asset_out(assets[i]) for i in (m.attachments or []) if i in assets],
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }
@@ -331,6 +332,9 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), us
         if not c.model:
             raise HTTPException(status_code=400, detail="请先为对话选择模型")
         targets = [(_chat_provider(db, c.provider_id), c.model)]
+    for provider, model in targets:
+        policy.check_access(db, user, "chat", provider.id, model)
+    policy.check_quota(db, user, "chat", len(targets))
 
     tree = Tree(list(c.messages))
     if body.regenerate:
@@ -377,23 +381,44 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), us
     db.commit()
 
     params = dict(c.params or {})
-    jobs = [(i, provider, model, reply.id) for i, ((provider, model), reply) in enumerate(zip(targets, replies))]
+    uid = user.id
+    prompt_chars = "".join(
+        h["content"] if isinstance(h["content"], str) else "".join(p.get("text", "") for p in h["content"])
+        for h in history
+    )
+    # 每个目标模型的候选服务（故障切换），在请求的数据库会话关闭前确定
+    jobs = [
+        (i, failover.candidates(db, provider, model, "chat"), model, reply.id)
+        for i, ((provider, model), reply) in enumerate(zip(targets, replies))
+    ]
     head = {
         "start": True,
         "user_message_id": parent.id,
         "compare_group": group,
-        "replies": [{"i": i, "id": mid, "model": model, "provider_id": provider.id} for i, provider, model, mid in jobs],
+        "replies": [{"i": i, "id": mid, "model": model, "provider_id": cands[0].id} for i, cands, model, mid in jobs],
     }
 
-    def save_reply(mid: int, content: str, reasoning: str, error: str = "") -> None:
+    def save_reply(mid: int, content: str, reasoning: str, error: str = "", served: Provider | None = None,
+                   usage: dict[str, Any] | None = None) -> None:
         with new_session() as s:
             msg = s.get(Message, mid)
             if msg is None:
                 return
             msg.content = content
             msg.reasoning = reasoning
+            meta = dict(msg.meta or {})
             if error:
-                msg.meta = {**(msg.meta or {}), "error": error}
+                meta["error"] = error
+            if served is not None and served.id != meta.get("provider_id"):
+                meta["served_by"] = served.name  # 发生了故障切换
+            msg.meta = meta
+            if served is not None and (content or reasoning):
+                if usage and (usage.get("prompt_tokens") or usage.get("completion_tokens")):
+                    policy.record_usage(s, uid, "chat", served.id, msg.model, 1,
+                                        int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0))
+                else:
+                    policy.record_usage(s, uid, "chat", served.id, msg.model, 1, policy.estimate_tokens(prompt_chars),
+                                        policy.estimate_tokens(content + reasoning), estimated=True)
             conv = s.get(Conversation, cid)
             if conv:
                 conv.updated_at = utcnow()
@@ -402,29 +427,46 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), us
     async def stream():
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
-        async def worker(i: int, provider: Provider, model: str, mid: int) -> None:
+        async def worker(i: int, cands: list[Provider], model: str, mid: int) -> None:
             content: list[str] = []
             reasoning: list[str] = []
+            usage: dict[str, Any] | None = None
+            served: Provider | None = None
             finished = False
             try:
-                async for kind, delta in openai_compat.chat_stream(provider, model, history, params):
-                    (content if kind == "content" else reasoning).append(delta)
-                    await queue.put({"i": i, "delta": delta} if kind == "content" else {"i": i, "reasoning": delta})
+                for n, provider in enumerate(cands):
+                    served = provider
+                    try:
+                        async for kind, delta in openai_compat.chat_stream(provider, model, history, params):
+                            if kind == "usage":
+                                usage = delta
+                                continue
+                            (content if kind == "content" else reasoning).append(delta)
+                            await queue.put({"i": i, "delta": delta} if kind == "content" else {"i": i, "reasoning": delta})
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        # 还没输出任何内容且是可重试的错误时，切换到下一个提供同名模型的服务
+                        if not content and not reasoning and n + 1 < len(cands) and failover.retryable(exc):
+                            await queue.put({"i": i, "failover": cands[n + 1].name, "reason": str(exc)[:200]})
+                            continue
+                        raise
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 finished = True
                 err = str(exc) or exc.__class__.__name__
-                save_reply(mid, "".join(content), "".join(reasoning), err)
+                save_reply(mid, "".join(content), "".join(reasoning), err, served, usage)
                 await queue.put({"i": i, "error": err, "message_id": mid})
             else:
                 finished = True
-                save_reply(mid, "".join(content), "".join(reasoning))
+                save_reply(mid, "".join(content), "".join(reasoning), "", served, usage)
                 await queue.put({"i": i, "done": True, "message_id": mid})
             finally:
                 # 客户端中途断开（点击“停止”）时也保留已生成的部分内容
                 if not finished:
-                    save_reply(mid, "".join(content), "".join(reasoning))
+                    save_reply(mid, "".join(content), "".join(reasoning), "", served, usage)
 
         workers = [asyncio.create_task(worker(*job)) for job in jobs]
         try:
@@ -450,6 +492,7 @@ async def auto_title(cid: int, db: Session = Depends(get_db), user: User = Depen
     provider = db.get(Provider, c.provider_id) if c.provider_id else None
     if provider is None or not c.model or not c.messages:
         raise HTTPException(status_code=400, detail="对话为空或未选择模型")
+    policy.check_access(db, user, "chat", provider.id, c.model)
     snippet = "\n".join(f"{m.role}: {m.content[:300]}" for m in active_path(c)[:4])
     try:
         title = await openai_compat.chat_complete(provider, c.model, [

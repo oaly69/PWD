@@ -18,7 +18,9 @@ ProgressCallback = Callable[[int, str], Awaitable[None]]
 
 
 class ProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status  # 上游 HTTP 状态码，用于判断是否可切换到备用服务
 
 
 def _base(provider: Provider) -> str:
@@ -48,7 +50,7 @@ def _error_text(resp: httpx.Response) -> str:
 
 def _raise(resp: httpx.Response, action: str) -> None:
     if resp.status_code >= 400:
-        raise ProviderError(f"{action}失败（HTTP {resp.status_code}）：{_error_text(resp)}")
+        raise ProviderError(f"{action}失败（HTTP {resp.status_code}）：{_error_text(resp)}", resp.status_code)
 
 
 # ---------------------------------------------------------------- 模型列表
@@ -79,49 +81,62 @@ async def chat_stream(
     model: str,
     messages: list[dict[str, Any]],
     params: dict[str, Any] | None = None,
-) -> AsyncIterator[tuple[str, str]]:
-    """逐段产出 (类型, 文本)，类型为 content（回复）或 reasoning（思考过程）。"""
+) -> AsyncIterator[tuple[str, Any]]:
+    """逐段产出 (类型, 内容)：content（回复）/ reasoning（思考过程）/ usage（Token 用量字典，可能没有）。"""
     body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
     for key in ("temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"):
         if params and params.get(key) is not None:
             body[key] = params[key]
+    # 请求在流末尾返回用量；个别服务不认识该参数时自动去掉重试
+    if (provider.extra or {}).get("stream_usage", True):
+        body["stream_options"] = {"include_usage": True}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        async with client.stream(
-            "POST", f"{_base(provider)}/chat/completions", headers=_headers(provider), json=body
-        ) as resp:
-            if resp.status_code >= 400:
-                await resp.aread()
-                _raise(resp, "对话请求")
-            if "text/event-stream" not in resp.headers.get("content-type", ""):
-                # 部分服务忽略 stream 参数，直接返回完整 JSON
-                await resp.aread()
-                msg = (resp.json().get("choices") or [{}])[0].get("message", {})
-                if msg.get("reasoning_content"):
-                    yield "reasoning", msg["reasoning_content"]
-                if msg.get("content"):
-                    yield "content", msg["content"]
+        for attempt in range(2):
+            async with client.stream(
+                "POST", f"{_base(provider)}/chat/completions", headers=_headers(provider), json=body
+            ) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    if attempt == 0 and resp.status_code in (400, 422) and "stream_options" in body and "stream" in resp.text.lower():
+                        body.pop("stream_options")
+                        continue
+                    _raise(resp, "对话请求")
+                if "text/event-stream" not in resp.headers.get("content-type", ""):
+                    # 部分服务忽略 stream 参数，直接返回完整 JSON
+                    await resp.aread()
+                    data = resp.json()
+                    msg = (data.get("choices") or [{}])[0].get("message", {})
+                    if msg.get("reasoning_content"):
+                        yield "reasoning", msg["reasoning_content"]
+                    if msg.get("content"):
+                        yield "content", msg["content"]
+                    if isinstance(data.get("usage"), dict):
+                        yield "usage", data["usage"]
+                    return
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    if chunk.get("error"):
+                        err = chunk["error"]
+                        raise ProviderError(err.get("message") if isinstance(err, dict) else str(err))
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                        if reasoning:
+                            yield "reasoning", reasoning
+                        if delta.get("content"):
+                            yield "content", delta["content"]
+                    if isinstance(chunk.get("usage"), dict) and chunk["usage"]:
+                        yield "usage", chunk["usage"]
                 return
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except ValueError:
-                    continue
-                if chunk.get("error"):
-                    err = chunk["error"]
-                    raise ProviderError(err.get("message") if isinstance(err, dict) else str(err))
-                for choice in chunk.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    if reasoning:
-                        yield "reasoning", reasoning
-                    if delta.get("content"):
-                        yield "content", delta["content"]
 
 
 async def chat_complete(provider: Provider, model: str, messages: list[dict[str, Any]], **params: Any) -> str:
@@ -130,6 +145,20 @@ async def chat_complete(provider: Provider, model: str, messages: list[dict[str,
         if kind == "content":
             parts.append(text)
     return "".join(parts).strip()
+
+
+async def chat_complete_usage(
+    provider: Provider, model: str, messages: list[dict[str, Any]], **params: Any
+) -> tuple[str, dict[str, Any] | None]:
+    """同 chat_complete，额外返回服务端报告的 Token 用量（没有时为 None）。"""
+    parts: list[str] = []
+    usage = None
+    async for kind, value in chat_stream(provider, model, messages, params):
+        if kind == "content":
+            parts.append(value)
+        elif kind == "usage":
+            usage = value
+    return "".join(parts).strip(), usage
 
 
 # ---------------------------------------------------------------- 图像

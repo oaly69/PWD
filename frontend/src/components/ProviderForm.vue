@@ -65,6 +65,16 @@
               <div class="field-label">视频接口风格</div>
               <n-select v-model:value="extra.video_api" :options="VIDEO_APIS" />
             </div>
+            <div>
+              <div class="field-label">故障切换优先级</div>
+              <n-input-number v-model:value="extra.priority" :min="-100" :max="100" placeholder="0" clearable />
+              <div class="hint">其他服务失败时，按优先级从高到低切换到提供同名模型的服务</div>
+            </div>
+            <div>
+              <div class="field-label">统计 Token 用量</div>
+              <n-switch :value="extra.stream_usage !== false" @update:value="(v) => (extra.stream_usage = v)" />
+              <div class="hint">请求时附带 stream_options 以获取真实用量；个别服务报错时可关闭（改为估算）</div>
+            </div>
           </div>
           <div class="field">
             <div class="field-label">自定义请求头 <span class="muted">JSON</span></div>
@@ -109,7 +119,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NDropdown, NInput, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
+import { NButton, NCollapse, NCollapseItem, NDropdown, NInput, NInputNumber, NRadioButton, NRadioGroup, NSelect, NSwitch } from 'naive-ui'
 import { AudioLines, Film, Image as ImageIcon, Layers, MessageSquare, Plus, RefreshCw, Trash2, Upload, Wand2 } from 'lucide-vue-next'
 import EmptyState from './EmptyState.vue'
 import { api, toast } from '../api'

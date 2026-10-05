@@ -155,7 +155,7 @@ async def generate(
                 headers=_headers(provider),
             )
             if up.status_code >= 400:
-                raise ProviderError(f"上传图片到 ComfyUI 失败（HTTP {up.status_code}）")
+                raise ProviderError(f"上传图片到 ComfyUI 失败（HTTP {up.status_code}）", up.status_code)
             info = up.json()
             values[key] = f"{info['subfolder']}/{info['name']}" if info.get("subfolder") else info["name"]
         if not values["image"] and _uses_placeholder(workflow, "image"):
@@ -169,7 +169,7 @@ async def generate(
             headers=_headers(provider),
         )
         if resp.status_code >= 400:
-            raise ProviderError(f"提交 ComfyUI 工作流失败（HTTP {resp.status_code}）：{resp.text[:500]}")
+            raise ProviderError(f"提交 ComfyUI 工作流失败（HTTP {resp.status_code}）：{resp.text[:500]}", resp.status_code)
         prompt_id = resp.json().get("prompt_id")
         if not prompt_id:
             raise ProviderError(f"ComfyUI 未返回 prompt_id：{resp.text[:300]}")

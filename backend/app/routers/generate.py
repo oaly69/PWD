@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..models import Asset, Provider, Task, User
+from ..services import policy
 from ..services import tasks as task_runner
 from ..site import get_setting
 from .assets import asset_out
@@ -70,6 +71,8 @@ def _create_task(db: Session, kind: str, body: GenerateIn, user: User) -> Task:
         raise HTTPException(status_code=400, detail=f"请先选择{KIND_LABEL[kind]}模型")
     if kind == "tts" and provider.kind != "openai":
         raise HTTPException(status_code=400, detail="语音合成仅支持 OpenAI 兼容接口")
+    policy.check_access(db, user, kind, provider.id, model)
+    policy.check_quota(db, user, kind, body.n if kind == "image" else 1)
     for aid in body.reference_asset_ids:
         ref = db.get(Asset, aid)
         if ref is None or ref.kind != "image" or ref.user_id != user.id:
@@ -140,6 +143,10 @@ async def edit_image(body: ImageEditIn, db: Session = Depends(get_db), user: Use
             raise HTTPException(status_code=400, detail="该模型服务已停用")
         if not body.model:
             raise HTTPException(status_code=400, detail="请选择模型")
+        policy.check_access(db, user, "image", provider.id, body.model)
+        policy.check_quota(db, user, "image", body.n)
+    else:
+        policy.check_access(db, user, "image")
     if body.op == "inpaint":
         if not body.prompt.strip():
             raise HTTPException(status_code=400, detail="请描述要在涂抹区域生成的内容")
@@ -219,6 +226,9 @@ async def retry_task(task_id: int, db: Session = Depends(get_db), user: User = D
     t = _get(db, task_id, user)
     if t.status in task_runner.ACTIVE:
         raise HTTPException(status_code=400, detail="任务进行中")
+    if t.provider_id:
+        policy.check_access(db, user, t.kind, t.provider_id, t.model)
+        policy.check_quota(db, user, t.kind, int((t.params or {}).get("n") or 1) if t.kind == "image" else 1)
     new = Task(user_id=user.id, kind=t.kind, status="pending", provider_id=t.provider_id, model=t.model, prompt=t.prompt, params=dict(t.params or {}))
     db.add(new)
     db.commit()

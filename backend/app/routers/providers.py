@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,8 @@ from ..deps import current_user, require_admin
 from ..models import User
 from ..models import Provider
 from ..security import mask_secret
-from ..services import comfyui, openai_compat
+from ..services import comfyui, openai_compat, policy
+from ..services.audit import audit
 from ..services.openai_compat import ProviderError
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -126,18 +127,18 @@ def _get(db: Session, provider_id: int) -> Provider:
     return p
 
 
-def provider_public(p: Provider) -> dict[str, Any]:
-    """普通用户可见的信息：只包含选择模型所需的字段，不暴露地址、Key 与工作流。"""
+def provider_public(p: Provider, group=None) -> dict[str, Any]:
+    """普通用户可见的信息：只包含选择模型所需的字段（按用户组过滤），不暴露地址、Key 与工作流。"""
     extra = p.extra or {}
     return {
         "id": p.id,
         "name": p.name,
         "kind": p.kind,
         "enabled": p.enabled,
-        "chat_models": p.chat_models or [],
-        "image_models": p.image_models or [],
-        "video_models": p.video_models or [],
-        "tts_models": p.tts_models or [],
+        "chat_models": policy.filter_models(group, p.id, "chat", p.chat_models or []),
+        "image_models": policy.filter_models(group, p.id, "image", p.image_models or []),
+        "video_models": policy.filter_models(group, p.id, "video", p.video_models or []),
+        "tts_models": policy.filter_models(group, p.id, "tts", p.tts_models or []),
         "extra": {k: extra[k] for k in ("image_edit_mode", "video_api") if k in extra},
     }
 
@@ -147,7 +148,8 @@ def list_providers(db: Session = Depends(get_db), user: User = Depends(current_u
     rows = db.query(Provider).order_by(Provider.id).all()
     if user.is_admin:
         return [provider_out(p) for p in rows]
-    return [provider_public(p) for p in rows if p.enabled]
+    group = policy.group_of(db, user)
+    return [provider_public(p, group) for p in rows if p.enabled]
 
 
 @router.get("/comfyui/example", dependencies=[Depends(require_admin)])
@@ -174,26 +176,31 @@ async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
     return await test_provider_connection(tmp)
 
 
-@router.post("", dependencies=[Depends(require_admin)])
-def create_provider(body: ProviderIn, db: Session = Depends(get_db)):
+@router.post("")
+def create_provider(body: ProviderIn, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     p = Provider()
     apply_provider(p, body)
     db.add(p)
+    audit(db, admin, "provider.create", p.name, p.base_url, request)
     db.commit()
     return provider_out(p)
 
 
-@router.put("/{provider_id}", dependencies=[Depends(require_admin)])
-def update_provider(provider_id: int, body: ProviderIn, db: Session = Depends(get_db)):
+@router.put("/{provider_id}")
+def update_provider(provider_id: int, body: ProviderIn, request: Request, db: Session = Depends(get_db),
+                    admin: User = Depends(require_admin)):
     p = _get(db, provider_id)
     apply_provider(p, body)
+    audit(db, admin, "provider.update", p.name, "更换了 API Key" if body.api_key else "", request)
     db.commit()
     return provider_out(p)
 
 
-@router.delete("/{provider_id}", dependencies=[Depends(require_admin)])
-def delete_provider(provider_id: int, db: Session = Depends(get_db)):
-    db.delete(_get(db, provider_id))
+@router.delete("/{provider_id}")
+def delete_provider(provider_id: int, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    p = _get(db, provider_id)
+    audit(db, admin, "provider.delete", p.name, p.base_url, request)
+    db.delete(p)
     db.commit()
     return {"ok": True}
 

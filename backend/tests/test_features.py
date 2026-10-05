@@ -143,11 +143,12 @@ def test_chat_multimodal_edit_export_search(installed, monkeypatch):
 def test_prompt_enhance(installed, monkeypatch):
     async def fake_complete(provider, model, messages, **params):
         assert model == "chat-model" and "绘画" in messages[0]["content"]
-        return "<think>嗯</think>一只橘猫，午后阳光，胶片质感"
+        return "<think>嗯</think>一只橘猫，午后阳光，胶片质感", {"prompt_tokens": 50, "completion_tokens": 20}
 
-    monkeypatch.setattr(openai_compat, "chat_complete", fake_complete)
+    monkeypatch.setattr(openai_compat, "chat_complete_usage", fake_complete)
     r = installed.post("/api/prompts/enhance", json={"prompt": "橘猫", "kind": "image"})
     assert r.json()["prompt"] == "一只橘猫，午后阳光，胶片质感"
+    assert installed.get("/api/usage/me").json()["usage"]["tokens_month"] == 70
 
 
 # ------------------------------------------------------------------ 生成任务

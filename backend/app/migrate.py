@@ -43,6 +43,10 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("messages", "meta", "JSON DEFAULT '{}'"),
     ("conversations", "current_leaf_id", "INTEGER"),
     ("assets", "board_id", "INTEGER REFERENCES boards(id) ON DELETE SET NULL"),
+    # v0.5 用户组、两步验证、单点登录
+    ("users", "group_id", "INTEGER REFERENCES user_groups(id) ON DELETE SET NULL"),
+    ("users", "totp_secret", "VARCHAR(64) DEFAULT ''"),
+    ("users", "oidc_sub", "VARCHAR(255)"),
 ]
 
 # 只在字段刚被添加时执行一次的回填（不可重复执行的数据迁移放这里）
@@ -69,6 +73,7 @@ DATA_MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS ix_prompts_user_id ON prompts (user_id)",
     "CREATE INDEX IF NOT EXISTS ix_messages_parent_id ON messages (parent_id)",
     "CREATE INDEX IF NOT EXISTS ix_assets_board_id ON assets (board_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_users_oidc_sub ON users (oidc_sub)",
 ]
 
 

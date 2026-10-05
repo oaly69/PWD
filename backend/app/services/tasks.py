@@ -6,7 +6,7 @@ import logging
 
 from ..db import new_session
 from ..models import Asset, Provider, Task, utcnow
-from . import comfyui, imageops, openai_compat
+from . import comfyui, failover, imageops, openai_compat, policy
 from .media import image_size, read_media, save_media
 from .openai_compat import ProviderError
 
@@ -140,8 +140,7 @@ async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[byte
 
     if params.get("op"):
         return await _execute_op(db, task, provider, prompt, params, on_progress)
-    if provider is None:
-        raise ProviderError("模型服务不存在或已被删除")
+    assert provider is not None
     refs = _load_references(db, params.get("reference_asset_ids"))
     if provider.kind == "comfyui":
         if task.kind == "tts":
@@ -158,6 +157,26 @@ async def _execute(db, task: Task, provider: Provider | None) -> list[tuple[byte
     raise ProviderError(f"未知任务类型：{task.kind}")
 
 
+async def _execute_with_failover(db, task: Task, provider: Provider | None) -> tuple[list[tuple[bytes, str]], Provider | None]:
+    """执行任务；可重试的错误（网络、限流、5xx）自动切换到提供同名模型的其他服务。"""
+    if provider is None:
+        return await _execute(db, task, None), None
+    kind = "image" if (task.params or {}).get("op") else task.kind
+    cands = failover.candidates(db, provider, task.model, kind)
+    for n, cand in enumerate(cands):
+        try:
+            outputs = await _execute(db, task, cand)
+        except Exception as exc:
+            if n + 1 < len(cands) and failover.retryable(exc):
+                log.info("task %s: %s 失败（%s），切换到 %s", task.id, cand.name, exc, cands[n + 1].name)
+                continue
+            raise
+        if cand.id != provider.id:
+            task.params = {**(task.params or {}), "served_by": cand.name}
+        return outputs, cand
+    raise ProviderError("没有可用的模型服务")
+
+
 async def _run(task_id: int) -> None:
     with new_session() as db:
         task = db.get(Task, task_id)
@@ -168,7 +187,9 @@ async def _run(task_id: int) -> None:
                 provider = db.get(Provider, task.provider_id) if task.provider_id else None
                 task.status = "running"
                 db.commit()
-                outputs = await _execute(db, task, provider)
+                if provider is None and not (task.params or {}).get("op"):
+                    raise ProviderError("模型服务不存在或已被删除")
+                outputs, served = await _execute_with_failover(db, task, provider)
                 for data, mime in outputs:
                     filename = save_media(data, mime)
                     kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else task.kind
@@ -177,6 +198,8 @@ async def _run(task_id: int) -> None:
                         user_id=task.user_id, kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
                         width=w, height=h, prompt=task.prompt, model=task.model, task_id=task.id,
                     ))
+                if served is not None:  # 本地放大不计入用量
+                    policy.record_usage(db, task.user_id, task.kind, served.id, task.model, max(1, len(outputs)))
                 task.status = "succeeded"
                 task.progress = 100
         except asyncio.CancelledError:

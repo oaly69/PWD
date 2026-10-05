@@ -34,10 +34,62 @@ class User(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("user_groups.id", ondelete="SET NULL"), nullable=True)
+    totp_secret: Mapped[str] = mapped_column(String(64), default="")  # 非空表示已开启两步验证
+    oidc_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
 
     @property
     def role(self) -> str:
         return "admin" if self.is_admin else "user"
+
+
+class UserGroup(Base):
+    """用户组：限制可用的能力与模型，并设置用量配额。管理员不受限制。"""
+
+    __tablename__ = "user_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # 允许使用的能力：chat / image / video / tts
+    kinds: Mapped[list] = mapped_column(JSON, default=lambda: ["chat", "image", "video", "tts"])
+    # 各能力允许的模型：{"chat": ["服务ID::模型名", ...], ...}；某能力为空表示该能力下的全部模型
+    models: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 配额：chat_daily / image_daily / video_daily / tts_daily / tokens_monthly，0 或缺省表示不限制
+    quotas: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UsageLog(Base):
+    """用量记录：每次对话回复 / 生成任务完成后记录一条。"""
+
+    __tablename__ = "usage_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # chat / image / video / tts
+    provider_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model: Mapped[str] = mapped_column(String(255), default="")
+    units: Mapped[int] = mapped_column(Integer, default=1)  # 回复条数 / 图片张数 / 视频个数 / 语音条数
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated: Mapped[bool] = mapped_column(Boolean, default=False)  # 服务未返回用量时按字数估算
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AuditLog(Base):
+    """操作日志：登录、用户与权限变更、模型服务与系统设置修改等。"""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(255), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class Provider(Base):

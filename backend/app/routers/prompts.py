@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..models import PromptTemplate, Provider, User
-from ..services import openai_compat
+from ..services import openai_compat, policy
 from ..site import get_setting
 
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])
@@ -57,7 +57,7 @@ class EnhanceIn(BaseModel):
 
 
 @router.post("/enhance")
-async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db), _user: User = Depends(current_user)):
+async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """使用对话模型优化 / 扩写提示词。"""
     pid, model = get_setting(db, "enhance_provider_id"), get_setting(db, "enhance_model")
     if not (pid and model):
@@ -65,13 +65,19 @@ async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db), _user: 
     provider = db.get(Provider, pid) if pid else None
     if provider is None or provider.kind != "openai" or not model:
         raise HTTPException(status_code=400, detail="请先在系统设置中配置「提示词优化模型」或默认对话模型")
+    # 提示词优化属于辅助功能，只计入用量与 Token 配额，不受用户组的模型白名单限制
+    policy.check_quota(db, user, "chat")
+    messages = [{"role": "system", "content": ENHANCE_SYSTEM[body.kind]}, {"role": "user", "content": body.prompt}]
     try:
-        text = await openai_compat.chat_complete(provider, model, [
-            {"role": "system", "content": ENHANCE_SYSTEM[body.kind]},
-            {"role": "user", "content": body.prompt},
-        ])
+        text, usage = await openai_compat.chat_complete_usage(provider, model, messages)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"优化失败：{exc}") from exc
+    if usage:
+        policy.record_usage(db, user.id, "chat", provider.id, model, 1, int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0))
+    else:
+        policy.record_usage(db, user.id, "chat", provider.id, model, 1,
+                            policy.estimate_tokens(messages[0]["content"] + body.prompt), policy.estimate_tokens(text), estimated=True)
+    db.commit()
     # 去掉推理模型可能输出的 <think> 段落
     if "</think>" in text:
         text = text.split("</think>", 1)[1]

@@ -67,7 +67,7 @@
             <template v-else>{{ current.icon || '🤖' }}</template>
           </div>
           <div class="msg-main">
-            <div v-if="m.role === 'assistant' && !(m.alternatives?.length > 1)" class="msg-meta">{{ m.model || current.model }}</div>
+            <div v-if="m.role === 'assistant' && !(m.alternatives?.length > 1)" class="msg-meta">{{ m.model || current.model }}<span v-if="m.served_by" class="served" title="原服务请求失败，已自动切换"> · 由「{{ m.served_by }}」提供</span></div>
             <div v-if="m.attachments?.length" class="attachments">
               <img v-for="a in m.attachments" :key="a.id" :src="a.thumb_url || a.url" @click="preview(m.attachments, a)" />
             </div>
@@ -86,7 +86,7 @@
             <div v-else-if="m.alternatives?.length > 1" class="compare" :style="{ '--cols': Math.min(m.alternatives.length, 4) }">
               <div v-for="alt in m.alternatives" :key="alt.id || alt.model" class="compare-col" :class="{ chosen: !m.streaming && alt.id === m.id }">
                 <div class="compare-head">
-                  <span class="ellipsis" :title="alt.model">{{ alt.model }}</span>
+                  <span class="ellipsis" :title="alt.served_by ? `由「${alt.served_by}」提供` : alt.model">{{ alt.model }}<template v-if="alt.served_by"> ↻</template></span>
                   <span class="spacer" />
                   <n-button v-if="!m.streaming && !alt.streaming" quaternary size="tiny" @click="copy(alt.content)"><template #icon><Copy :size="13" /></template></n-button>
                   <n-tag v-if="!m.streaming && alt.id === m.id" size="small" type="primary" :bordered="false">当前</n-tag>
@@ -543,6 +543,7 @@ async function stream(body) {
       if (!target) return
       if (ev.delta) target.content += ev.delta
       if (ev.reasoning) target.reasoning += ev.reasoning
+      if (ev.failover) target.served_by = ev.failover
       if (ev.error) target.error = ev.error
       if (ev.done || ev.error) target.streaming = false
       scrollBottom()
@@ -690,6 +691,7 @@ onMounted(async () => {
 .ops { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
 .msg:hover .ops { opacity: 1; }
 .edit-box { width: min(640px, 100%); }
+.served { color: var(--warning); }
 .branch-nav { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); margin-right: 4px; font-variant-numeric: tabular-nums; }
 .branch-nav button { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px; border-radius: 4px; display: grid; place-items: center; }
 .branch-nav button:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
