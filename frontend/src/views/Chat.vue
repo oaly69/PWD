@@ -699,7 +699,14 @@ function compareModels() {
 }
 
 async function stream(body) {
-  await flushParams()
+  // 先进入发送状态再保存设置，避免等待期间重复发送
+  sending.value = true
+  try {
+    await flushParams()
+  } catch (e) {
+    sending.value = false
+    throw e
+  }
   const conv = current.value
   const models = compareModels()
   if (models.length) body.models = models
@@ -758,9 +765,11 @@ async function stream(body) {
     if (fresh) {
       // 请求本身失败（未进入流式）时，在末尾提示错误
       if (err && current.value?.id === conv.id) {
-        const last = fresh.messages[fresh.messages.length - 1]
+        // 通过响应式对象修改，保证错误提示立即渲染
+        const list = current.value.messages
+        const last = list[list.length - 1]
         if (last?.role === 'assistant' && !last.error) last.error = err
-        else if (last?.role !== 'assistant') fresh.messages.push({ role: 'assistant', content: '', error: err })
+        else if (last?.role !== 'assistant') list.push({ role: 'assistant', content: '', error: err })
       }
       const item = convs.value.find((c) => c.id === conv.id)
       if (item) item.title = fresh.title
