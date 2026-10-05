@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -113,6 +113,8 @@ class Provider(Base):
     image_models: Mapped[list] = mapped_column(JSON, default=list)
     video_models: Mapped[list] = mapped_column(JSON, default=list)
     tts_models: Mapped[list] = mapped_column(JSON, default=list)
+    embedding_models: Mapped[list] = mapped_column(JSON, default=list)  # 知识库向量化
+    stt_models: Mapped[list] = mapped_column(JSON, default=list)  # 语音识别
     # 额外配置：ComfyUI 工作流、额外请求头等
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -215,6 +217,46 @@ class Board(Base):
     name: Mapped[str] = mapped_column(String(64))
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeBase(Base):
+    """知识库：上传文档后切分并向量化，对话时检索相关片段作为参考资料。"""
+
+    __tablename__ = "knowledge_bases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+    # 向量模型；为空时使用关键词检索
+    embedding_provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KbDocument(Base):
+    __tablename__ = "kb_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kb_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    chars: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending / processing / ready / failed
+    error: Mapped[str] = mapped_column(Text, default="")
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KbChunk(Base):
+    __tablename__ = "kb_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kb_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
+    doc_id: Mapped[int] = mapped_column(ForeignKey("kb_documents.id", ondelete="CASCADE"), index=True)
+    idx: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)  # float32 向量
 
 
 class PromptTemplate(Base):

@@ -81,9 +81,13 @@ async def chat_stream(
     model: str,
     messages: list[dict[str, Any]],
     params: dict[str, Any] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
-    """逐段产出 (类型, 内容)：content（回复）/ reasoning（思考过程）/ usage（Token 用量字典，可能没有）。"""
+    """逐段产出 (类型, 内容)：content（回复）/ reasoning（思考过程）/ usage（Token 用量字典，可能没有）
+    / tool_calls（模型请求调用的工具列表，流结束时产出一次）。"""
     body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if tools:
+        body["tools"] = tools
     for key in ("temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"):
         if params and params.get(key) is not None:
             body[key] = params[key]
@@ -110,9 +114,12 @@ async def chat_stream(
                         yield "reasoning", msg["reasoning_content"]
                     if msg.get("content"):
                         yield "content", msg["content"]
+                    if msg.get("tool_calls"):
+                        yield "tool_calls", msg["tool_calls"]
                     if isinstance(data.get("usage"), dict):
                         yield "usage", data["usage"]
                     return
+                calls: dict[int, dict[str, Any]] = {}
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line.startswith("data:"):
@@ -134,8 +141,19 @@ async def chat_stream(
                             yield "reasoning", reasoning
                         if delta.get("content"):
                             yield "content", delta["content"]
+                        for tc in delta.get("tool_calls") or []:
+                            slot = calls.setdefault(int(tc.get("index") or 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                slot["function"]["arguments"] += fn["arguments"]
                     if isinstance(chunk.get("usage"), dict) and chunk["usage"]:
                         yield "usage", chunk["usage"]
+                if calls:
+                    yield "tool_calls", [calls[k] for k in sorted(calls) if calls[k]["function"]["name"]]
                 return
 
 
@@ -159,6 +177,39 @@ async def chat_complete_usage(
         elif kind == "usage":
             usage = value
     return "".join(parts).strip(), usage
+
+
+# ---------------------------------------------------------------- 向量与语音识别
+
+
+async def embeddings(provider: Provider, model: str, texts: list[str], batch: int = 32) -> list[list[float]]:
+    out: list[list[float]] = []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for i in range(0, len(texts), batch):
+            part = texts[i:i + batch]
+            resp = await client.post(f"{_base(provider)}/embeddings", headers=_headers(provider), json={"model": model, "input": part})
+            _raise(resp, "向量化")
+            items = sorted(resp.json().get("data") or [], key=lambda d: d.get("index", 0))
+            if len(items) != len(part):
+                raise ProviderError("向量化结果数量与输入不一致")
+            out.extend(item["embedding"] for item in items)
+    return out
+
+
+async def transcribe(provider: Provider, model: str, data: bytes, filename: str, mime: str, language: str | None = None) -> str:
+    form = {"model": model}
+    if language:
+        form["language"] = language
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.post(
+            f"{_base(provider)}/audio/transcriptions", headers=_headers(provider, json_body=False), data=form,
+            files={"file": (filename, data, mime)},
+        )
+    _raise(resp, "语音识别")
+    try:
+        return str(resp.json().get("text", "")).strip()
+    except ValueError:
+        return resp.text.strip()
 
 
 # ---------------------------------------------------------------- 图像

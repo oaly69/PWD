@@ -28,6 +28,11 @@
           </div>
         </section>
         <section class="sec">
+          <h3>语音输入（语音识别）</h3>
+          <p class="muted desc">对话输入框的麦克风按钮使用的模型（OpenAI 兼容 /audio/transcriptions，如 whisper-1、FunAudioLLM/SenseVoiceSmall）。留空则不显示语音输入。</p>
+          <ModelSelect v-model="keys.stt" kind="stt" placeholder="不启用" style="max-width: 420px" />
+        </section>
+        <section class="sec">
           <h3>提示词优化模型</h3>
           <p class="muted desc">图像 / 视频页面「AI 优化」按钮使用的对话模型，留空则使用默认对话模型。</p>
           <ModelSelect v-model="keys.enhance" kind="chat" placeholder="使用默认对话模型" style="max-width: 420px" />
@@ -69,6 +74,52 @@
           </n-form>
         </section>
         <n-button type="primary" :loading="saving" @click="saveSecurity">保存</n-button>
+      </n-tab-pane>
+
+      <n-tab-pane v-if="admin" name="tools" tab="搜索与工具">
+        <section class="sec">
+          <h3>联网搜索</h3>
+          <p class="muted desc">对话中开启「联网」后，会先搜索再回答并标注来源；也作为模型可调用的工具。</p>
+          <n-form label-placement="top" style="max-width: 640px">
+            <n-form-item label="搜索引擎">
+              <n-radio-group v-model:value="search.search_engine">
+                <n-radio-button value="">不启用</n-radio-button>
+                <n-radio-button value="searxng">SearXNG（自建，免费）</n-radio-button>
+                <n-radio-button value="tavily">Tavily</n-radio-button>
+                <n-radio-button value="bocha">博查（国内）</n-radio-button>
+              </n-radio-group>
+            </n-form-item>
+            <n-form-item v-if="search.search_engine === 'searxng'" label="SearXNG 地址">
+              <div style="width: 100%">
+                <n-input v-model:value="search.search_url" placeholder="http://searxng:8080" />
+                <div class="muted small-hint">需要在 SearXNG 的 settings.yml 中 search.formats 加入 json</div>
+              </div>
+            </n-form-item>
+            <n-form-item v-if="search.search_engine && search.search_engine !== 'searxng'" label="API Key">
+              <n-input v-model:value="search.search_api_key" type="password" show-password-on="click" :placeholder="searchKeySet ? '已设置，留空保持不变' : ''" />
+            </n-form-item>
+            <n-form-item v-if="search.search_engine" label="每次返回结果数">
+              <n-input-number v-model:value="search.search_max_results" :min="1" :max="20" style="width: 140px" />
+            </n-form-item>
+          </n-form>
+        </section>
+        <section class="sec">
+          <h3>MCP 服务</h3>
+          <p class="muted desc">接入支持 Streamable HTTP 的 MCP 服务后，其工具会出现在对话的「工具」列表中供模型调用（需要模型支持 Function Calling）。</p>
+          <div v-for="(m, i) in mcp" :key="i" class="mcp-row">
+            <n-switch v-model:value="m.enabled" size="small" />
+            <n-input v-model:value="m.name" size="small" placeholder="名称" style="width: 140px" />
+            <n-input v-model:value="m.url" size="small" placeholder="https://example.com/mcp" style="flex: 1" />
+            <n-input v-model:value="m.headersText" size="small" placeholder='请求头 JSON，如 {"Authorization": "Bearer …"}' style="flex: 1" />
+            <n-button size="small" secondary :loading="m.testing" @click="testMcp(m)">测试</n-button>
+            <n-button size="small" quaternary type="error" @click="mcp.splice(i, 1)"><template #icon><Trash2 :size="14" /></template></n-button>
+            <div v-if="m.result" class="mcp-result" :class="m.result.ok ? 'ok' : 'err'">
+              {{ m.result.message }}<template v-if="m.result.tools?.length">：{{ m.result.tools.map((t) => t.name).join('、') }}</template>
+            </div>
+          </div>
+          <n-button size="small" secondary @click="addMcp"><template #icon><Plus :size="14" /></template>添加 MCP 服务</n-button>
+        </section>
+        <n-button type="primary" :loading="saving" @click="saveTools">保存</n-button>
       </n-tab-pane>
 
       <n-tab-pane name="appearance" tab="外观">
@@ -200,8 +251,8 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { NButton, NCheckbox, NForm, NFormItem, NInput, NProgress, NSwitch, NTabPane, NTabs, NTag } from 'naive-ui'
-import { AudioLines, Check, Coins, Download, Film, Image as ImageIcon, MessageSquare, ShieldCheck } from 'lucide-vue-next'
+import { NButton, NCheckbox, NForm, NFormItem, NInput, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSwitch, NTabPane, NTabs, NTag } from 'naive-ui'
+import { AudioLines, Check, Coins, Download, Film, Image as ImageIcon, MessageSquare, Plus, ShieldCheck, Trash2 } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import ModelSelect from '../components/ModelSelect.vue'
 import { api, loadSite, toast } from '../api'
@@ -242,7 +293,10 @@ const totpCode = ref('')
 const disablePwd = ref('')
 const usage = ref(null)
 const s = reactive({ site_name: '', default_system_prompt: '' })
-const keys = reactive({ chat: '', image: '', video: '', tts: '', enhance: '' })
+const keys = reactive({ chat: '', image: '', video: '', tts: '', enhance: '', stt: '' })
+const search = reactive({ search_engine: '', search_url: '', search_api_key: '', search_max_results: 5 })
+const searchKeySet = ref(false)
+const mcp = ref([])
 const pwd = reactive({ old_password: '', new_password: '', confirm: '' })
 const stats = ref(null)
 const saving = ref(false)
@@ -257,6 +311,10 @@ async function load() {
   Object.assign(s, { site_name: data.site_name, default_system_prompt: data.default_system_prompt || '' })
   for (const k of KINDS) keys[k.kind] = keyOf(data[`default_${k.kind}_provider_id`], data[`default_${k.kind}_model`])
   keys.enhance = keyOf(data.enhance_provider_id, data.enhance_model)
+  keys.stt = keyOf(data.stt_provider_id, data.stt_model)
+  Object.assign(search, { search_engine: data.search_engine || '', search_url: data.search_url || '', search_api_key: '', search_max_results: data.search_max_results || 5 })
+  searchKeySet.value = !!data.search_api_key_set
+  mcp.value = (data.mcp_servers || []).map((m) => ({ ...m, headersText: Object.keys(m.headers || {}).length ? JSON.stringify(m.headers) : '', result: null, testing: false }))
   for (const k of SEC_KEYS) sec[k] = data[k]
   sec.oidc_client_secret = ''
   secretSet.value = !!data.oidc_client_secret_set
@@ -272,6 +330,49 @@ async function saveSecurity() {
     secretSet.value = !!store.settings.oidc_client_secret_set
     sec.oidc_client_secret = ''
     await loadSite()
+    toast('设置已保存', 'success')
+  } finally {
+    saving.value = false
+  }
+}
+
+function parseHeaders(m) {
+  if (!m.headersText?.trim()) return {}
+  const h = JSON.parse(m.headersText)
+  if (typeof h !== 'object' || Array.isArray(h)) throw new Error('请求头必须是 JSON 对象')
+  return h
+}
+
+function addMcp() {
+  mcp.value.push({ id: Math.random().toString(36).slice(2, 8), name: '', url: '', headersText: '', enabled: true, result: null, testing: false })
+}
+
+async function testMcp(m) {
+  let headers
+  try { headers = parseHeaders(m) } catch (e) { return toast(`「${m.name || m.url}」${e.message}`, 'error') }
+  m.testing = true
+  try {
+    m.result = await api.post('/api/tools/mcp/test', { url: m.url, headers })
+  } finally {
+    m.testing = false
+  }
+}
+
+async function saveTools() {
+  const servers = []
+  for (const m of mcp.value) {
+    if (!m.url.trim()) continue
+    let headers
+    try { headers = parseHeaders(m) } catch (e) { return toast(`「${m.name || m.url}」${e.message}`, 'error') }
+    servers.push({ id: m.id, name: m.name.trim() || m.url, url: m.url.trim(), headers, enabled: m.enabled })
+  }
+  const body = { search_engine: search.search_engine, search_url: search.search_url, search_max_results: search.search_max_results, mcp_servers: servers }
+  if (search.search_api_key) body.search_api_key = search.search_api_key
+  saving.value = true
+  try {
+    store.settings = await api.put('/api/settings', body)
+    searchKeySet.value = !!store.settings.search_api_key_set
+    search.search_api_key = ''
     toast('设置已保存', 'success')
   } finally {
     saving.value = false
@@ -320,6 +421,9 @@ async function save() {
   const [epid, emodel] = splitModelKey(keys.enhance)
   body.enhance_provider_id = epid
   body.enhance_model = emodel
+  const [spid, smodel] = splitModelKey(keys.stt)
+  body.stt_provider_id = spid
+  body.stt_model = smodel
   saving.value = true
   try {
     store.settings = await api.put('/api/settings', body)
@@ -381,6 +485,11 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 .stat { padding: 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
 .stat b { font-size: 20px; }
 .stat span { color: var(--muted); font-size: 12px; }
+.small-hint { font-size: 12px; margin-top: 4px; }
+.mcp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; max-width: 900px; }
+.mcp-result { width: 100%; font-size: 12.5px; padding: 4px 10px; border-radius: 6px; }
+.mcp-result.ok { color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.mcp-result.err { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 640px; padding: 10px 0; }
 .oidc-form { max-width: 640px; margin-top: 6px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }

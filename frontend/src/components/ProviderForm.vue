@@ -42,10 +42,11 @@
       <div v-if="result" class="result" :class="result.ok ? 'ok' : 'err'">{{ result.message }}</div>
       <div class="model-grid">
         <div v-for="cap in CAPS" :key="cap.key">
-          <div class="cap-label"><component :is="cap.icon" :size="14" /> {{ cap.label }}<span v-if="form[cap.key].length" class="muted">（{{ form[cap.key].length }}）</span></div>
+          <div class="cap-label"><component :is="cap.icon" :size="14" /> {{ cap.label }}<span v-if="form[cap.key]?.length" class="muted">（{{ form[cap.key].length }}）</span></div>
           <n-select
-            v-model:value="form[cap.key]"
+            :value="form[cap.key] || []"
             multiple
+            @update:value="(v) => (form[cap.key] = v)"
             filterable
             tag
             :options="remoteOptions"
@@ -120,7 +121,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NDropdown, NInput, NInputNumber, NRadioButton, NRadioGroup, NSelect, NSwitch } from 'naive-ui'
-import { AudioLines, Film, Image as ImageIcon, Layers, MessageSquare, Plus, RefreshCw, Trash2, Upload, Wand2 } from 'lucide-vue-next'
+import { AudioLines, Binary, Film, Image as ImageIcon, Layers, MessageSquare, Mic, Plus, RefreshCw, Trash2, Upload, Wand2 } from 'lucide-vue-next'
 import EmptyState from './EmptyState.vue'
 import { api, toast } from '../api'
 import { PROVIDER_PRESETS } from '../constants'
@@ -136,7 +137,9 @@ const CAPS = [
   { key: 'chat_models', label: '对话模型', icon: MessageSquare, placeholder: '如 gpt-4o、deepseek-chat' },
   { key: 'image_models', label: '图像模型', icon: ImageIcon, placeholder: '如 gpt-image-1、Kwai-Kolors/Kolors' },
   { key: 'video_models', label: '视频模型', icon: Film, placeholder: '如 sora-2、Wan-AI/Wan2.2-T2V-A14B' },
-  { key: 'tts_models', label: '语音模型', icon: AudioLines, placeholder: '如 tts-1、gpt-4o-mini-tts' },
+  { key: 'tts_models', label: '语音合成模型', icon: AudioLines, placeholder: '如 tts-1、gpt-4o-mini-tts' },
+  { key: 'embedding_models', label: '向量模型（知识库）', icon: Binary, placeholder: '如 text-embedding-3-small、BAAI/bge-m3' },
+  { key: 'stt_models', label: '语音识别模型', icon: Mic, placeholder: '如 whisper-1、FunAudioLLM/SenseVoiceSmall' },
 ]
 const EDIT_MODES = [
   { label: '/images/edits 接口（OpenAI gpt-image-1 等）', value: 'edits' },
@@ -268,6 +271,8 @@ function autoFill() {
   form.image_models = merge(form.image_models, c.image)
   form.video_models = merge(form.video_models, c.video)
   form.tts_models = merge(form.tts_models, c.tts)
+  form.embedding_models = merge(form.embedding_models, c.embedding)
+  form.stt_models = merge(form.stt_models, c.stt)
   toast('已按模型名称自动分类，请检查后保存', 'success')
 }
 

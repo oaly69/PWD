@@ -33,7 +33,7 @@ const props = defineProps({
   placeholder: { type: String, default: '选择模型' },
 })
 const emit = defineEmits(['update:modelValue'])
-const LABEL = { chat: '对话', image: '图像', video: '视频', tts: '语音' }
+const LABEL = { chat: '对话', image: '图像', video: '视频', tts: '语音', embedding: '向量', stt: '语音识别' }
 
 const options = computed(() => {
   void store.providers

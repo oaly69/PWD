@@ -16,6 +16,7 @@ const routes = [
       { path: 'video', component: () => import('./views/VideoStudio.vue'), meta: { title: '视频生成', full: true } },
       { path: 'speech', component: () => import('./views/SpeechStudio.vue'), meta: { title: '语音合成', full: true } },
       { path: 'gallery', component: () => import('./views/Gallery.vue'), meta: { title: '作品库' } },
+      { path: 'knowledge', component: () => import('./views/Knowledge.vue'), meta: { title: '知识库' } },
       { path: 'library', component: () => import('./views/Library.vue'), meta: { title: '提示词与角色' } },
       { path: 'providers', component: () => import('./views/Providers.vue'), meta: { title: '模型服务', admin: true } },
       { path: 'users', component: () => import('./views/Users.vue'), meta: { title: '用户管理', admin: true } },

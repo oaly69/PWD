@@ -81,6 +81,9 @@ def do_install(body: InstallIn, response: Response, db: Session = Depends(get_db
                 if models:
                     set_setting(db, f"default_{kind}_provider_id", provider.id)
                     set_setting(db, f"default_{kind}_model", models[0])
+            if provider.stt_models:
+                set_setting(db, "stt_provider_id", provider.id)
+                set_setting(db, "stt_model", provider.stt_models[0])
 
         seed_defaults(db)
         set_setting(db, "installed", True)

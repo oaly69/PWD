@@ -17,7 +17,7 @@ from .. import db as dbmod
 from ..db import get_db
 from ..deps import current_user, require_admin
 from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User, utcnow
-from ..site import EDITABLE_KEYS, PUBLIC_KEYS, SECRET_KEYS, all_settings, set_setting
+from ..site import ADMIN_KEYS, EDITABLE_KEYS, PUBLIC_KEYS, SECRET_KEYS, all_settings, set_setting
 from ..services.audit import audit
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -34,17 +34,22 @@ def site_info(db: Session = Depends(get_db)):
     return {k: data[k] for k in PUBLIC_KEYS} | {"version": VERSION}
 
 
-def _settings_out(db: Session) -> dict[str, Any]:
+def _settings_out(db: Session, admin: bool = True) -> dict[str, Any]:
     data = all_settings(db)
-    out = {k: v for k, v in data.items() if k in EDITABLE_KEYS and k not in SECRET_KEYS}
-    for k in SECRET_KEYS:
-        out[f"{k}_set"] = bool(data.get(k))
+    out = {k: v for k, v in data.items() if k in EDITABLE_KEYS and k not in SECRET_KEYS and (admin or k not in ADMIN_KEYS)}
+    if admin:
+        for k in SECRET_KEYS:
+            out[f"{k}_set"] = bool(data.get(k))
+    from ..services import websearch
+
+    out["search_available"] = websearch.configured(db)
+    out["stt_available"] = bool(data.get("stt_provider_id") and data.get("stt_model"))
     return out
 
 
-@router.get("/settings", dependencies=[Depends(current_user)])
-def get_settings(db: Session = Depends(get_db)):
-    return _settings_out(db)
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _settings_out(db, user.is_admin)
 
 
 @router.put("/settings")

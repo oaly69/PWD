@@ -47,6 +47,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("users", "group_id", "INTEGER REFERENCES user_groups(id) ON DELETE SET NULL"),
     ("users", "totp_secret", "VARCHAR(64) DEFAULT ''"),
     ("users", "oidc_sub", "VARCHAR(255)"),
+    # v0.6 知识库与语音识别
+    ("providers", "embedding_models", "JSON DEFAULT '[]'"),
+    ("providers", "stt_models", "JSON DEFAULT '[]'"),
 ]
 
 # 只在字段刚被添加时执行一次的回填（不可重复执行的数据迁移放这里）

@@ -55,13 +55,14 @@ def test_comfyui_workflow_kinds(installed):
 
 
 def test_classify_models():
-    out = classify_models(["gpt-4o", "gpt-image-1", "sora-2", "tts-1", "text-embedding-3-small",
+    out = classify_models(["gpt-4o", "gpt-image-1", "sora-2", "tts-1", "text-embedding-3-small", "whisper-1", "BAAI/bge-reranker-v2-m3",
                            "Qwen/Qwen2.5-VL-72B-Instruct", "Kwai-Kolors/Kolors", "Wan-AI/Wan2.2-T2V-A14B"])
     assert out["chat"] == ["gpt-4o", "Qwen/Qwen2.5-VL-72B-Instruct"]
     assert out["image"] == ["gpt-image-1", "Kwai-Kolors/Kolors"]
     assert out["video"] == ["sora-2", "Wan-AI/Wan2.2-T2V-A14B"]
     assert out["tts"] == ["tts-1"]
-    assert out["other"] == ["text-embedding-3-small"]
+    assert out["embedding"] == ["text-embedding-3-small"] and out["stt"] == ["whisper-1"]
+    assert out["other"] == ["BAAI/bge-reranker-v2-m3"]
 
 
 def test_fill_workflow():

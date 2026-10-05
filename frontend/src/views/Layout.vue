@@ -67,8 +67,7 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NButton, NDropdown, NLayout, NLayoutSider, NMenu } from 'naive-ui'
 import {
-  AudioLines, BookText, ChevronDown, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LogOut, Menu,
-  MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
+  AudioLines, BookText, ChevronDown, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LibraryBig, LogOut, Menu, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
 } from 'lucide-vue-next'
 import TaskCenter from '../components/TaskCenter.vue'
 import { api } from '../api'
@@ -103,6 +102,7 @@ const menuOptions = computed(() => [
     type: 'group', label: '资产', key: 'assets',
     children: [
       { label: link('/gallery', '作品库'), key: '/gallery', icon: icon(GalleryHorizontalEnd) },
+      { label: link('/knowledge', '知识库'), key: '/knowledge', icon: icon(LibraryBig) },
       { label: link('/library', '提示词与角色'), key: '/library', icon: icon(BookText) },
     ],
   },

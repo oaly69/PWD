@@ -28,6 +28,8 @@ class ProviderIn(BaseModel):
     image_models: list[str] = []
     video_models: list[str] = []
     tts_models: list[str] = []
+    embedding_models: list[str] = []
+    stt_models: list[str] = []
     extra: dict[str, Any] = {}
 
 
@@ -53,6 +55,8 @@ def apply_provider(provider: Provider, body: ProviderIn) -> None:
     provider.image_models = _clean_models(body.image_models)
     provider.video_models = _clean_models(body.video_models)
     provider.tts_models = _clean_models(body.tts_models) if body.kind == "openai" else []
+    provider.embedding_models = _clean_models(body.embedding_models) if body.kind == "openai" else []
+    provider.stt_models = _clean_models(body.stt_models) if body.kind == "openai" else []
     provider.extra = body.extra or {}
     if body.kind == "comfyui":
         workflows = provider.extra.get("workflows") or {}
@@ -77,6 +81,8 @@ def provider_out(p: Provider) -> dict[str, Any]:
         "image_models": p.image_models or [],
         "video_models": p.video_models or [],
         "tts_models": p.tts_models or [],
+        "embedding_models": p.embedding_models or [],
+        "stt_models": p.stt_models or [],
         "extra": p.extra or {},
     }
 
@@ -99,16 +105,22 @@ _IMAGE_HINTS = ("image", "dall-e", "flux", "kolors", "stable-diffusion", "sdxl",
 _VIDEO_HINTS = ("video", "sora", "veo", "kling", "wan2", "wan-", "hunyuanvideo", "seedance", "hailuo", "cogvideo",
                 "runway", "pika", "vidu", "ltx")
 _TTS_HINTS = ("tts", "speech", "cosyvoice", "fish-speech", "fishaudio", "indextts", "moss-tts", "voice")
-_SKIP_HINTS = ("embed", "rerank", "whisper", "asr", "moderation", "sensevoice", "bge-", "transcribe")
+_EMBED_HINTS = ("embed", "bge-", "m3e", "gte-", "jina-embeddings")
+_STT_HINTS = ("whisper", "asr", "sensevoice", "transcribe", "paraformer", "telespeech")
+_SKIP_HINTS = ("rerank", "moderation")
 
 
 def classify_models(models: list[str]) -> dict[str, list[str]]:
     """按名称特征把模型粗略归类为 文本 / 图像 / 视频 / 语音，供前端一键勾选。"""
-    out: dict[str, list[str]] = {"chat": [], "image": [], "video": [], "tts": [], "other": []}
+    out: dict[str, list[str]] = {"chat": [], "image": [], "video": [], "tts": [], "embedding": [], "stt": [], "other": []}
     for m in models:
         low = m.lower()
         if any(h in low for h in _SKIP_HINTS):
             out["other"].append(m)
+        elif any(h in low for h in _EMBED_HINTS):
+            out["embedding"].append(m)
+        elif any(h in low for h in _STT_HINTS):
+            out["stt"].append(m)
         elif any(h in low for h in _VIDEO_HINTS):
             out["video"].append(m)
         elif any(h in low for h in _TTS_HINTS):
@@ -139,6 +151,8 @@ def provider_public(p: Provider, group=None) -> dict[str, Any]:
         "image_models": policy.filter_models(group, p.id, "image", p.image_models or []),
         "video_models": policy.filter_models(group, p.id, "video", p.video_models or []),
         "tts_models": policy.filter_models(group, p.id, "tts", p.tts_models or []),
+        "embedding_models": p.embedding_models or [],
+        "stt_models": [],
         "extra": {k: extra[k] for k in ("image_edit_mode", "video_api") if k in extra},
     }
 
