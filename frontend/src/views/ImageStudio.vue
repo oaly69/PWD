@@ -4,18 +4,23 @@
       <div class="field-label">
         模型
         <span class="spacer" />
-        <n-button text size="tiny" :type="compare ? 'primary' : 'default'" @click="compare = !compare"><template #icon><Columns3 :size="13" /></template>多模型对比</n-button>
+        <n-button v-if="!batch" text size="tiny" :type="compare ? 'primary' : 'default'" @click="compare = !compare"><template #icon><Columns3 :size="13" /></template>多模型对比</n-button>
       </div>
       <ModelSelect v-model="modelKey" kind="image" />
-      <template v-if="compare">
+      <template v-if="compare && !batch">
         <ModelSelect v-model="compareKeys" kind="image" multiple placeholder="再选 1～3 个模型，用同一提示词同时生成" class="compare-select" />
         <div class="muted hint">每个模型各生成一个任务，结果在右侧并列出现，便于比较效果</div>
       </template>
     </div>
 
     <div class="block">
-      <div class="field-label">提示词</div>
-      <PromptInput v-model="form.prompt" kind="image" placeholder="描述你想要的画面，越具体越好。例如：一只坐在窗边的橘猫，午后阳光透过纱帘，胶片质感" @template="onTemplate" @submit="generate" />
+      <div class="field-label">
+        提示词
+        <span class="spacer" />
+        <ModeSwitch v-model="batch" />
+      </div>
+      <BatchPromptInput v-if="batch" v-model="batchText" v-model:split="batchSplit" kind="image" :placeholder="BATCH_PLACEHOLDER" @submit="generate" />
+      <PromptInput v-else v-model="form.prompt" kind="image" placeholder="描述你想要的画面，越具体越好。例如：一只坐在窗边的橘猫，午后阳光透过纱帘，胶片质感" @template="onTemplate" @submit="generate" />
     </div>
 
     <div class="block">
@@ -67,7 +72,12 @@
     </n-collapse>
 
     <template #footer>
-      <n-button type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !form.prompt.trim()" @click="generate">
+      <n-button v-if="batch" type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !batchPrompts.length || batchPrompts.length > MAX_BATCH" @click="generate">
+        <template #icon><Layers :size="18" /></template>
+        批量生成 {{ batchPrompts.length }} 条{{ batchPrompts.length ? ` · 共 ${batchPrompts.length * form.n} 张` : '' }}
+        <span class="kbd">Ctrl ↵</span>
+      </n-button>
+      <n-button v-else type="primary" size="large" block :loading="submitting" :disabled="!modelKey || !form.prompt.trim()" @click="generate">
         <template #icon><Sparkles :size="18" /></template>
         生成 {{ form.n > 1 ? `${form.n} 张` : '' }}{{ extraKeys.length ? ` · ${extraKeys.length + 1} 个模型` : '' }}
         <span class="kbd">Ctrl ↵</span>
@@ -82,9 +92,12 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
+import { useLocalRef } from '../composables/localRef'
 import { NButton, NCollapse, NCollapseItem, NInput, NInputGroup, NInputNumber, NRadioButton, NRadioGroup, NSlider } from 'naive-ui'
-import { Columns3, Dices, Image as ImageIcon, Sparkles } from 'lucide-vue-next'
+import { Columns3, Dices, Image as ImageIcon, Layers, Sparkles } from 'lucide-vue-next'
 import AspectPicker from '../components/AspectPicker.vue'
+import BatchPromptInput from '../components/BatchPromptInput.vue'
+import ModeSwitch from '../components/ModeSwitch.vue'
 import ModelSelect from '../components/ModelSelect.vue'
 import PromptInput from '../components/PromptInput.vue'
 import ReferenceImages from '../components/ReferenceImages.vue'
@@ -94,6 +107,7 @@ import { api, toast } from '../api'
 import { STYLE_PRESETS } from '../constants'
 import { splitModelKey } from '../store'
 import { useStudio } from '../composables/studio'
+import { MAX_BATCH, parseBatch } from '../utils/batch'
 
 const form = reactive({ prompt: '', negative_prompt: '', size: '1024x1024', n: 1, seed: null, steps: 25 })
 const style = ref(null)
@@ -103,8 +117,15 @@ const feed = ref(null)
 const compare = ref(false)
 const compareKeys = ref([])
 const extraKeys = computed(() => (compare.value ? compareKeys.value.filter((k) => k !== modelKey.value).slice(0, 3) : []))
+// 批量模式：多条提示词共用下方的风格、比例、数量等参数
+const BATCH_PLACEHOLDER = '每行一条提示词，例如：\n一只坐在窗边的橘猫，午后阳光\n雪山下的小木屋，清晨薄雾\n赛博朋克街头的{雨夜|黄昏}'
+const batch = useLocalRef('pwd.batch.image', false)
+const batchText = ref('')
+const batchSplit = useLocalRef('pwd.batch.image.split', 'line')
+const batchPrompts = computed(() => parseBatch(batchText.value, batchSplit.value))
 
 function applyParams(prompt, params, providerId, model) {
+  batch.value = false
   form.prompt = prompt || ''
   form.negative_prompt = params.negative_prompt || ''
   form.size = params.size || form.size
@@ -120,10 +141,10 @@ function applyParams(prompt, params, providerId, model) {
   } else refs.value = []
 }
 
-const { modelKey, submitting, submit, isComfy, currentProvider } = useStudio('image', {
+const { modelKey, submitting, submit, submitBatch, isComfy, currentProvider } = useStudio('image', {
   onRef: (a) => { refs.value = [a]; toast('已添加为参考图', 'success') },
   onAsset: (a) => applyParams(a.prompt, a.params || {}, a.provider_id, a.model),
-  onPrompt: (p, neg) => { form.prompt = p; if (neg) form.negative_prompt = neg },
+  onPrompt: (p, neg) => { batch.value = false; form.prompt = p; if (neg) form.negative_prompt = neg },
 })
 
 const maxRefs = computed(() => {
@@ -146,7 +167,9 @@ function useRef(a) {
 }
 
 async function generate() {
-  if (!modelKey.value || !form.prompt.trim() || submitting.value) return
+  if (!modelKey.value || submitting.value) return
+  if (batch.value ? !batchPrompts.value.length : !form.prompt.trim()) return
+  if (batch.value && batchPrompts.value.length > MAX_BATCH) return toast(`单次最多 ${MAX_BATCH} 条提示词`, 'warning')
   let extra_body = null
   if (extraText.value.trim()) {
     try {
@@ -167,6 +190,12 @@ async function generate() {
     style_negative: style.value?.negative || null,
     reference_asset_ids: refs.value.map((r) => r.id),
     extra_body,
+  }
+  if (batch.value) {
+    const r = await submitBatch(batchPrompts.value, body)
+    for (const t of [...r.tasks].reverse()) feed.value?.add(t)
+    toast(`已提交 ${r.tasks.length} 个任务，将按队列依次生成`, 'success')
+    return
   }
   const task = await submit(body)
   feed.value?.add(task)

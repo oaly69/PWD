@@ -1,4 +1,4 @@
-// 主流程端到端测试：安装 → 对话（分支 / 对比 / 知识库 / 工具）→ 图像生成与编辑 → 作品集 → 短片项目 → 多用户与配额。
+// 主流程端到端测试：安装 → 对话（分支 / 对比 / 知识库 / 工具）→ 图像生成、编辑与批量生成 → 作品集 → 短片项目 → 多用户与配额。
 // 各步骤依赖前一步的数据，按顺序在同一个浏览器页面中执行。
 import { expect, test } from '@playwright/test'
 
@@ -131,6 +131,20 @@ test('图像：生成、局部重绘与本地放大', async () => {
   const tasks = await (await page.request.get('/api/tasks?limit=5')).json()
   expect(tasks.every((t) => t.status === 'succeeded')).toBeTruthy()
   await page.keyboard.press('Escape')
+})
+
+test('图像：批量生成', async () => {
+  await page.goto('/image')
+  await page.click('.mode-switch button:has-text("批量")')
+  await page.fill('.batch textarea', '一只橘猫\n{红|蓝}色的花\n\n')
+  await expect(page.locator('.batch .count')).toHaveText('共 3 条')
+  await page.click('.panel-foot button')
+  await expect(page.locator('.batch-tag')).toHaveCount(3)
+  await tasksIdle()
+  const tasks = await (await page.request.get('/api/tasks?kind=image&limit=3')).json()
+  expect(tasks.map((t) => t.prompt)).toEqual(['蓝色的花', '红色的花', '一只橘猫'])
+  expect(tasks.every((t) => t.status === 'succeeded')).toBeTruthy()
+  await page.click('.mode-switch button:has-text("单条")')
 })
 
 test('作品集', async () => {

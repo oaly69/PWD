@@ -70,6 +70,7 @@ import {
   AudioLines, BookText, ChevronDown, Clapperboard, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LibraryBig, LogOut, Menu, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
 } from 'lucide-vue-next'
 import TaskCenter from '../components/TaskCenter.vue'
+import { prefetchViews } from '../router'
 import { api } from '../api'
 import { loadProviders, store } from '../store'
 import { setThemeMode, themeMode } from '../composables/theme'
@@ -167,6 +168,7 @@ watch(() => route.fullPath, () => { mobileOpen.value = false })
 onMounted(() => {
   window.addEventListener('resize', onResize)
   loadProviders()
+  prefetchViews()
 })
 onUnmounted(() => window.removeEventListener('resize', onResize))
 </script>

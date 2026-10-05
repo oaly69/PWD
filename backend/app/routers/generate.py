@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -12,6 +14,7 @@ from ..models import Asset, Provider, Task, User
 from ..services import policy
 from ..services import tasks as task_runner
 from ..site import get_setting
+from ..timeutil import iso
 from .assets import asset_out
 
 router = APIRouter(prefix="/api", tags=["generate"])
@@ -53,13 +56,14 @@ def task_out(t: Task) -> dict[str, Any]:
         "prompt": t.prompt,
         "params": t.params or {},
         "error": t.error,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "finished_at": t.finished_at.isoformat() if t.finished_at else None,
+        "created_at": iso(t.created_at),
+        "finished_at": iso(t.finished_at),
         "assets": [asset_out(a) for a in t.assets],
     }
 
 
-def _create_task(db: Session, kind: str, body: GenerateIn, user: User) -> Task:
+def _prepare(db: Session, kind: str, body: GenerateIn, user: User, count: int = 1) -> tuple[Provider, str, dict[str, Any]]:
+    """校验模型服务、权限、配额与参考图，返回 (服务, 模型, 任务参数)。count 为提示词条数（批量生成）。"""
     provider_id = body.provider_id or get_setting(db, f"default_{kind}_provider_id")
     model = body.model or get_setting(db, f"default_{kind}_model") or ""
     provider = db.get(Provider, provider_id) if provider_id else None
@@ -72,14 +76,19 @@ def _create_task(db: Session, kind: str, body: GenerateIn, user: User) -> Task:
     if kind == "tts" and provider.kind != "openai":
         raise HTTPException(status_code=400, detail="语音合成仅支持 OpenAI 兼容接口")
     policy.check_access(db, user, kind, provider.id, model)
-    policy.check_quota(db, user, kind, body.n if kind == "image" else 1)
+    policy.check_quota(db, user, kind, (body.n if kind == "image" else 1) * count)
     for aid in body.reference_asset_ids:
         ref = db.get(Asset, aid)
         if ref is None or ref.kind != "image" or ref.user_id != user.id:
             raise HTTPException(status_code=400, detail=f"参考图 #{aid} 不存在或不是图片")
-    params = body.model_dump(exclude={"provider_id", "model", "prompt"}, exclude_none=True, exclude_defaults=False)
+    params = body.model_dump(exclude={"provider_id", "model", "prompt", "prompts"}, exclude_none=True, exclude_defaults=False)
     if kind != "image":
         params.pop("n", None)
+    return provider, model, params
+
+
+def _create_task(db: Session, kind: str, body: GenerateIn, user: User) -> Task:
+    provider, model, params = _prepare(db, kind, body, user)
     task = Task(user_id=user.id, kind=kind, status="pending", provider_id=provider.id, model=model, prompt=body.prompt, params=params)
     db.add(task)
     db.commit()
@@ -90,6 +99,61 @@ def _create_task(db: Session, kind: str, body: GenerateIn, user: User) -> Task:
 @router.post("/generate/{kind}")
 async def generate(kind: Kind, body: GenerateIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     return task_out(_create_task(db, kind, body, user))
+
+
+MAX_BATCH = 50
+
+
+class BatchIn(GenerateIn):
+    prompt: str = Field("", max_length=20000)  # 批量模式不使用
+    prompts: list[str] = Field(..., min_length=1, max_length=MAX_BATCH)
+
+
+@router.post("/generate/{kind}/batch")
+async def generate_batch(kind: Literal["image", "video"], body: BatchIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """批量生成：多条提示词共用同一组参数，每条提示词一个任务，按队列依次执行。"""
+    prompts = [p.strip() for p in body.prompts if p and p.strip()]
+    if not prompts:
+        raise HTTPException(status_code=400, detail="请至少输入一条提示词")
+    if any(len(p) > 20000 for p in prompts):
+        raise HTTPException(status_code=400, detail="单条提示词不能超过 20000 字")
+    provider, model, params = _prepare(db, kind, body, user, count=len(prompts))
+    batch_id = uuid.uuid4().hex[:12]
+    rows = []
+    for i, prompt in enumerate(prompts):
+        p = dict(params, batch_id=batch_id, batch_index=i + 1, batch_total=len(prompts))
+        rows.append(Task(user_id=user.id, kind=kind, status="pending", provider_id=provider.id, model=model, prompt=prompt, params=p))
+    db.add_all(rows)
+    db.commit()
+    for t in rows:
+        task_runner.submit(t.id)
+    # 新任务在前，与任务列表的排序一致
+    return {"batch_id": batch_id, "tasks": [task_out(t) for t in reversed(rows)]}
+
+
+def _batch_query(db: Session, batch_id: str, user: User):
+    return db.query(Task).filter(Task.user_id == user.id, func.json_extract(Task.params, "$.batch_id") == batch_id)
+
+
+@router.get("/task-batches/{batch_id}")
+def get_batch(batch_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = _batch_query(db, batch_id, user).order_by(Task.id.desc()).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return [task_out(t) for t in rows]
+
+
+@router.post("/task-batches/{batch_id}/cancel")
+def cancel_batch(batch_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """取消批次中所有未完成的任务。"""
+    n = 0
+    for t in _batch_query(db, batch_id, user).filter(Task.status.in_(task_runner.ACTIVE)).all():
+        if not task_runner.cancel(t.id):
+            t.status = "cancelled"
+            t.error = "已取消"
+        n += 1
+    db.commit()
+    return {"ok": True, "cancelled": n}
 
 
 @router.post("/images/generate")
@@ -181,6 +245,7 @@ async def edit_image(body: ImageEditIn, db: Session = Depends(get_db), user: Use
 def list_tasks(
     kind: str | None = None,
     status: str | None = None,
+    batch: str | None = None,
     limit: int = 30,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -189,6 +254,8 @@ def list_tasks(
     q = db.query(Task).filter(Task.user_id == user.id)
     if kind:
         q = q.filter(Task.kind == kind)
+    if batch:
+        q = q.filter(func.json_extract(Task.params, "$.batch_id") == batch)
     if status == "active":
         q = q.filter(Task.status.in_(task_runner.ACTIVE))
     elif status:

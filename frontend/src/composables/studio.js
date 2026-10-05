@@ -49,6 +49,17 @@ export function useStudio(kind, { onAsset, onRef, onPrompt } = {}) {
     }
   }
 
+  /** 批量生成：多条提示词共用 body 中的参数，返回 { batch_id, tasks }（新任务在前）。 */
+  async function submitBatch(prompts, body) {
+    const [provider_id, model] = splitModelKey(modelKey.value)
+    submitting.value = true
+    try {
+      return await api.post(`/api/generate/${kind}/batch`, { ...body, prompts, provider_id, model })
+    } finally {
+      submitting.value = false
+    }
+  }
+
   onMounted(async () => {
     await loadProviders()
     const settings = await loadSettings().catch(() => ({}))
@@ -63,5 +74,5 @@ export function useStudio(kind, { onAsset, onRef, onPrompt } = {}) {
     if (q.ref || q.asset || q.prompt) handleQuery()
   })
 
-  return { modelKey, submitting, submit, isComfy, currentProvider }
+  return { modelKey, submitting, submit, submitBatch, isComfy, currentProvider }
 }

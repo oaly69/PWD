@@ -83,7 +83,7 @@ import UsageReport from '../components/admin/UsageReport.vue'
 import UserGroups from '../components/admin/UserGroups.vue'
 import { api, confirmDialog, toast } from '../api'
 import { loadSettings, store } from '../store'
-import { formatBytes, relativeTime } from '../utils/format'
+import { formatBytes, formatDate, relativeTime } from '../utils/format'
 
 const STATUS = { active: ['正常', 'success'], pending: ['待审核', 'warning'], disabled: ['已禁用', 'error'] }
 
@@ -123,7 +123,7 @@ const columns = [
           u.id === store.user?.id ? h('span', { class: 'me' }, '（我）') : null,
           u.totp_enabled ? h('span', { class: 'badge-2fa', title: '已开启两步验证' }, [h(ShieldCheck, { size: 13 })]) : null,
         ]),
-        h('div', { class: 'muted small' }, `注册于 ${new Date(u.created_at).toLocaleDateString('zh-CN')}`),
+        h('div', { class: 'muted small' }, `注册于 ${formatDate(u.created_at)}`),
       ]),
     ]),
   },

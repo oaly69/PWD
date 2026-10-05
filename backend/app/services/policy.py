@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import timeutil
 from ..models import User, UsageLog, UserGroup
 
 KINDS = ("chat", "image", "video", "tts")
@@ -60,13 +61,11 @@ def check_access(db: Session, user: User, kind: str, provider_id: int | None = N
 
 
 def _local_day_start() -> datetime:
-    now = datetime.now().astimezone()
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    return timeutil.day_start()
 
 
 def _local_month_start() -> datetime:
-    now = datetime.now().astimezone()
-    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    return timeutil.month_start()
 
 
 def usage_summary(db: Session, user_id: int) -> dict[str, Any]:
@@ -148,8 +147,8 @@ def usage_report(db: Session, days: int = 30) -> dict[str, Any]:
     base = db.query(UsageLog).filter(UsageLog.created_at >= since)
     tokens = func.sum(UsageLog.prompt_tokens + UsageLog.completion_tokens)
     daily = (
-        base.with_entities(func.date(UsageLog.created_at), UsageLog.kind, func.sum(UsageLog.units), tokens)
-        .group_by(func.date(UsageLog.created_at), UsageLog.kind)
+        base.with_entities(func.date(UsageLog.created_at, timeutil.SQLITE_OFFSET), UsageLog.kind, func.sum(UsageLog.units), tokens)
+        .group_by(func.date(UsageLog.created_at, timeutil.SQLITE_OFFSET), UsageLog.kind)
         .all()
     )
     by_user = (

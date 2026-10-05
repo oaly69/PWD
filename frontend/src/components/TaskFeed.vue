@@ -11,6 +11,7 @@
           <template v-if="active(t)" #icon><n-spin :size="10" /></template>
           {{ STATUS_TEXT[t.status] }}<template v-if="t.status === 'running' && t.progress"> · {{ t.progress }}%</template>
         </n-tag>
+        <span v-if="t.params?.batch_id" class="batch-tag" :title="`批量任务 ${t.params.batch_id}`"><Layers :size="11" /> {{ t.params.batch_index }}/{{ t.params.batch_total }}</span>
         <span class="meta ellipsis">{{ summary(t) }}</span>
         <span class="spacer" />
         <span class="time">{{ relativeTime(t.created_at) }}</span>
@@ -59,7 +60,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { NButton, NDropdown, NProgress, NSpin, NTag } from 'naive-ui'
-import { AudioLines, CircleAlert, Download, Ellipsis, Film, Image as ImageIcon, ImagePlus, Star } from 'lucide-vue-next'
+import { AudioLines, CircleAlert, Download, Ellipsis, Film, Image as ImageIcon, ImagePlus, Layers, Star } from 'lucide-vue-next'
 import { api, confirmDialog, toast } from '../api'
 import { STATUS_TEXT, STATUS_TYPE } from '../constants'
 import { copyText, downloadUrl, relativeTime } from '../utils/format'
@@ -118,12 +119,30 @@ function menu(t) {
     items.push({ label: '重新生成', key: 'retry' })
     items.push({ label: '删除记录', key: 'delete' })
   }
+  if (t.params?.batch_id) {
+    const same = tasks.value.filter((x) => x.params?.batch_id === t.params.batch_id)
+    items.push({ type: 'divider', key: 'd' })
+    if (same.some(active)) items.push({ label: '取消整批未完成的任务', key: 'batch-cancel' })
+    items.push({ label: '下载整批结果（zip）', key: 'batch-download' })
+  }
   return items
+}
+
+async function batchDownload(bid) {
+  const rows = await api.get(`/api/task-batches/${bid}`)
+  const ids = rows.flatMap((x) => x.assets.map((a) => a.id))
+  if (!ids.length) return toast('这一批还没有生成结果', 'info')
+  downloadUrl(`/api/assets-zip?ids=${ids.join(',')}`)
 }
 
 async function onMenu(key, t) {
   if (key === 'reuse') emit('reuse', t)
   else if (key === 'copy') (await copyText(t.prompt)) && toast('已复制', 'success')
+  else if (key === 'batch-cancel') {
+    const r = await api.post(`/api/task-batches/${t.params.batch_id}/cancel`)
+    toast(`已取消 ${r.cancelled} 个任务`, 'info')
+    poll()
+  } else if (key === 'batch-download') batchDownload(t.params.batch_id)
   else if (key === 'cancel') {
     await api.post(`/api/tasks/${t.id}/cancel`)
     toast('已取消', 'info')
@@ -160,13 +179,17 @@ async function load() {
 }
 
 async function poll() {
-  for (const t of tasks.value.filter(active)) {
-    try {
-      const fresh = await api.get(`/api/tasks/${t.id}`, { silent: true })
-      Object.assign(t, fresh)
-    } catch {
-      /* 忽略轮询错误 */
+  const pending = tasks.value.filter(active)
+  if (!pending.length) return
+  try {
+    // 一次取回所有进行中的任务；已不在列表中的说明刚结束，再单独取最终结果
+    const live = new Map((await api.get(`/api/tasks?kind=${props.kind}&status=active&limit=100`, { silent: true })).map((x) => [x.id, x]))
+    for (const t of pending) {
+      const fresh = live.get(t.id) || (await api.get(`/api/tasks/${t.id}`, { silent: true }).catch(() => null))
+      if (fresh) Object.assign(t, fresh)
     }
+  } catch {
+    /* 忽略轮询错误 */
   }
 }
 
@@ -187,6 +210,7 @@ onUnmounted(() => clearInterval(timer))
 .feed { display: flex; flex-direction: column; gap: 14px; }
 .task-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 16px; }
 .head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.batch-tag { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: 11.5px; font-weight: 600; padding: 1px 7px; border-radius: 10px; color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); }
 .meta { font-size: 12px; color: var(--muted); min-width: 0; }
 .time { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .prompt { margin: 8px 0 12px; font-size: 13.5px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-2); }

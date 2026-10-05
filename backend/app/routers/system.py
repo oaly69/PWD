@@ -4,7 +4,7 @@ import os
 import sqlite3
 import tempfile
 import zipfile
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -16,9 +16,10 @@ from ..config import VERSION, settings
 from .. import db as dbmod
 from ..db import get_db
 from ..deps import current_user, require_admin
-from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User, utcnow
+from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User
 from ..site import ADMIN_KEYS, EDITABLE_KEYS, PUBLIC_KEYS, SECRET_KEYS, all_settings, set_setting
 from ..services.audit import audit
+from .. import timeutil
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -84,15 +85,16 @@ def stats(db: Session = Depends(get_db), user: User = Depends(current_user)):
     """当前用户的统计；管理员额外返回全站概况（site）。"""
     mine = Asset.user_id == user.id
     by_kind = dict(db.query(Asset.kind, func.count(Asset.id)).filter(mine).group_by(Asset.kind).all())
-    since = utcnow() - timedelta(days=13)
+    since = timeutil.day_start(13)
+    local_date = func.date(Asset.created_at, timeutil.SQLITE_OFFSET)
     daily_rows = (
-        db.query(func.date(Asset.created_at), func.count(Asset.id))
+        db.query(local_date, func.count(Asset.id))
         .filter(mine, Asset.created_at >= since, Asset.source == "generated")
-        .group_by(func.date(Asset.created_at))
+        .group_by(local_date)
         .all()
     )
     daily_map = {str(d): n for d, n in daily_rows}
-    today = utcnow().date()
+    today = timeutil.now().date()
     daily = [
         {"date": (today - timedelta(days=i)).isoformat(), "count": daily_map.get((today - timedelta(days=i)).isoformat(), 0)}
         for i in range(13, -1, -1)
@@ -159,7 +161,7 @@ def backup(background: BackgroundTasks, request: Request, include_media: bool = 
     src.close()
     dst.close()
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = timeutil.now().strftime("%Y%m%d-%H%M%S")
     zip_path = os.path.join(tmpdir, f"pwd-backup-{stamp}.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(db_copy, "pwd.db")

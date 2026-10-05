@@ -12,6 +12,7 @@ from ..deps import current_user, require_admin
 from ..models import AuditLog, User, UserGroup
 from ..services import policy
 from ..services.audit import ACTION_LABEL, audit
+from ..timeutil import iso
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
@@ -132,7 +133,7 @@ def audit_logs(
             {
                 "id": r.id, "user_id": r.user_id, "username": r.username, "action": r.action,
                 "label": ACTION_LABEL.get(r.action, r.action), "target": r.target, "detail": r.detail, "ip": r.ip,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "created_at": iso(r.created_at),
             }
             for r in rows
         ],

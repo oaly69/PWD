@@ -14,6 +14,7 @@ from ..models import Asset, Conversation, Task, User, UserGroup
 from ..security import hash_password
 from ..services.audit import audit
 from ..services.media import delete_media
+from ..timeutil import iso
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -30,8 +31,8 @@ def user_out(u: User, stats: dict[str, Any] | None = None) -> dict[str, Any]:
         "group_id": u.group_id,
         "totp_enabled": bool(u.totp_secret),
         "oidc_linked": bool(u.oidc_sub),
-        "created_at": u.created_at.isoformat() if u.created_at else None,
-        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+        "created_at": iso(u.created_at),
+        "last_login_at": iso(u.last_login_at),
     }
     if stats is not None:
         data.update(stats)

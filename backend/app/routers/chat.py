@@ -19,6 +19,7 @@ from ..services import failover, knowledge, openai_compat, policy, websearch
 from ..services import tools as tools_svc
 from ..services.media import downscale_for_llm, read_media, to_data_uri
 from ..site import get_setting
+from ..timeutil import iso
 from .assets import asset_out
 
 router = APIRouter(prefix="/api/conversations", tags=["chat"])
@@ -47,7 +48,7 @@ def msg_out(m: Message, assets: dict[int, Asset]) -> dict[str, Any]:
             {**{k: t.get(k) for k in ("name", "label", "args", "result")}, "assets": [asset_out(assets[i]) for i in t.get("asset_ids") or [] if i in assets]}
             for t in meta.get("tools") or []
         ],
-        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "created_at": iso(m.created_at),
     }
 
 
@@ -114,8 +115,8 @@ def conv_out(c: Conversation, db: Session | None = None, with_messages: bool = F
         "model": c.model,
         "system_prompt": c.system_prompt,
         "params": c.params or {},
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "created_at": iso(c.created_at),
+        "updated_at": iso(c.updated_at),
     }
     if with_messages and db is not None:
         tree = Tree(list(c.messages))

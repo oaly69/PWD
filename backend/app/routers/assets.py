@@ -15,6 +15,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import Asset, Board, User
 from ..services.media import delete_media, ensure_thumb, image_size, local_media, save_media
+from ..timeutil import iso
 
 router = APIRouter(tags=["assets"])
 
@@ -41,7 +42,7 @@ def asset_out(a: Asset) -> dict[str, Any]:
         "task_id": a.task_id,
         "params": (task.params or {}) if task else {},
         "provider_id": task.provider_id if task else None,
-        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "created_at": iso(a.created_at),
     }
 
 
@@ -197,7 +198,7 @@ def board_out(db: Session, b: Board) -> dict[str, Any]:
         "description": b.description,
         "count": q.count(),
         "covers": [f"/thumbs/{a.filename}" for a in covers],
-        "created_at": b.created_at.isoformat() if b.created_at else None,
+        "created_at": iso(b.created_at),
     }
 
 
