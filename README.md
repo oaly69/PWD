@@ -318,7 +318,7 @@ podman rm -f pwd   # 数据在 ~/pwd/data，不会丢失
 
 ## 镜像构建（GitHub Actions）
 
-- `.github/workflows/docker.yml`：推送到 `main` 构建 `latest`；推送 `v*` 标签构建版本号镜像；也可在 Actions 页面手动触发。构建 `linux/amd64` 与 `linux/arm64` 双架构，推送至 `ghcr.io/<owner>/<repo>`。
+- `.github/workflows/docker.yml`：推送到 `main` 构建 `latest`，同时打上版本号标签（如 `0.9.0`、`0.9`，取自 `backend/app/config.py` 中的 `VERSION`，发版时修改该值即可）；推送 `v*` 标签同样构建版本号镜像；也可在 Actions 页面手动触发。构建 `linux/amd64` 与 `linux/arm64` 双架构，推送至 `ghcr.io/<owner>/<repo>`。
 - `.github/workflows/ci.yml`：PR 与非 main 分支运行后端测试与前端构建。
 
 > 首次推送后 GHCR 包默认为私有。如需免登录拉取，请在 GitHub 仓库主页右侧 **Packages → pwd → Package settings → Change visibility** 设为 Public。

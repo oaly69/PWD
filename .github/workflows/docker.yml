@@ -1,6 +1,7 @@
 name: Docker Image
 
-# main 分支推送 -> latest；v* 标签 -> 版本号标签；也可在 Actions 页面手动触发任意分支
+# main 分支推送 -> latest + 版本号标签（取自 backend/app/config.py 的 VERSION，如 0.9.0、0.9）；
+# v* 标签 -> 版本号标签；也可在 Actions 页面手动触发任意分支
 on:
   push:
     branches: [main]
@@ -35,6 +36,14 @@ jobs:
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: 读取应用版本号
+        id: ver
+        run: |
+          v=$(grep -oP 'PWD_VERSION", "\K[0-9]+\.[0-9]+\.[0-9]+' backend/app/config.py)
+          test -n "$v" || { echo "无法从 config.py 读取版本号"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -50,6 +59,8 @@ jobs:
           images: ${{ steps.img.outputs.name }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.ver.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=branch,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -63,6 +74,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.ref == 'refs/heads/main' && steps.ver.outputs.version || format('dev-{0}', github.sha) }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
