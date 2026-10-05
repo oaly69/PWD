@@ -202,9 +202,7 @@ def test_recover_tasks_after_restart(installed, monkeypatch):
 
     async def fake_video(provider, model, prompt, params, reference, on_progress, resume_id=None):
         seen["resume"] = resume_id
-        out = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=5", "-t", "1",
-                              "-pix_fmt", "yuv420p", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov", "pipe:1"], capture_output=True)
-        return [(out.stdout or b"x", "video/mp4")]
+        return [(b"\x00\x00\x00\x18ftypmp42", "video/mp4")]  # 占位内容，不依赖 FFmpeg
 
     async def fake_images(provider, model, prompt, params, refs=None):
         return [(_png(), "image/png")]
