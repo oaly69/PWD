@@ -171,6 +171,7 @@ test('多用户：用户组配额', async () => {
   await page.locator('.quota-grid label:has-text("每日对话条数") input').fill('1')
   await page.click('.n-modal button:has-text("保存")')
   await page.click('.card:has-text("体验组") button:has-text("设为新用户默认")')
+  await expect(page.locator('.card:has-text("体验组") .n-tag:has-text("新用户默认")')).toBeVisible()
   await page.locator('.n-tabs-tab').first().click()
   await page.click('button:has-text("添加用户")')
   await page.fill('.n-modal input[placeholder^="2～32"]', 'bob')
