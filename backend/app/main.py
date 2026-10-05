@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .config import VERSION, settings
-from .routers import assets, auth, chat, generate, install, prompts, providers, system
+from .routers import assets, auth, chat, generate, install, prompts, providers, system, users
 from .seed import seed_if_upgraded
 from .services import tasks
 
@@ -33,7 +33,7 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="PWD - 个人 AIGC 创作平台", version=VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
-    for r in (system.router, install.router, auth.router, providers.router, chat.router, generate.router, assets.router, prompts.router):
+    for r in (system.router, install.router, auth.router, providers.router, chat.router, generate.router, assets.router, prompts.router, users.router):
         app.include_router(r)
 
     static_dir = settings.static_dir

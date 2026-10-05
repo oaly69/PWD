@@ -11,7 +11,8 @@
     <template #empty>
       <div class="empty">
         暂无可用{{ LABEL[kind] }}模型
-        <router-link to="/providers">去配置模型服务 →</router-link>
+        <router-link v-if="store.user?.is_admin" to="/providers">去配置模型服务 →</router-link>
+        <span v-else>请联系管理员配置</span>
       </div>
     </template>
   </n-select>

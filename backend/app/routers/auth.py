@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user, require_installed
-from ..models import User
+from ..deps import STATUS_MESSAGE, current_user, require_installed
+from ..models import User, utcnow
+from ..site import get_setting
 from ..security import COOKIE_NAME, SESSION_TTL, create_session_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _FAIL_WINDOW = 600
 _FAIL_LIMIT = 10
 _failures: dict[str, list[float]] = defaultdict(list)
+_registers: dict[str, list[float]] = defaultdict(list)  # 同一 IP 每小时最多注册 5 次
 
 
 def set_session_cookie(response: Response, token: str) -> None:
@@ -48,8 +50,41 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         _failures[ip].append(now)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     _failures.pop(ip, None)
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail=STATUS_MESSAGE.get(user.status, "账号不可用"))
+    user.last_login_at = utcnow()
+    db.commit()
     set_session_cookie(response, create_session_token(user.id, user.token_version))
     return {"ok": True, "username": user.username}
+
+
+class RegisterIn(BaseModel):
+    username: str = Field(..., min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_\-\u4e00-\u9fa5]+$")
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+@router.post("/register", dependencies=[Depends(require_installed)])
+def register(body: RegisterIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    if not get_setting(db, "allow_register"):
+        raise HTTPException(status_code=403, detail="当前站点未开放注册，请联系管理员")
+    ip = _client_ip(request)
+    now = time.time()
+    _registers[ip] = [t for t in _registers[ip] if now - t < 3600]
+    if len(_registers[ip]) >= 5:
+        raise HTTPException(status_code=429, detail="注册过于频繁，请稍后再试")
+    username = body.username.strip()
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+    status = "pending" if get_setting(db, "register_need_approval") else "active"
+    user = User(username=username, password_hash=hash_password(body.password), is_admin=False, status=status)
+    db.add(user)
+    db.commit()
+    _registers[ip].append(now)
+    if status == "active":
+        user.last_login_at = utcnow()
+        db.commit()
+        set_session_cookie(response, create_session_token(user.id, user.token_version))
+    return {"ok": True, "username": user.username, "status": status}
 
 
 @router.post("/logout")
@@ -60,7 +95,7 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(user: User = Depends(current_user)):
-    return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
+    return {"id": user.id, "username": user.username, "is_admin": user.is_admin, "role": user.role, "status": user.status}
 
 
 class PasswordIn(BaseModel):

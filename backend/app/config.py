@@ -14,7 +14,7 @@ import secrets
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = os.environ.get("PWD_VERSION", "0.2.0")
+VERSION = os.environ.get("PWD_VERSION", "0.3.0")
 
 
 def _default_data_dir() -> Path:

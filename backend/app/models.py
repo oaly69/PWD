@@ -28,9 +28,16 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # active 正常 / pending 待审核 / disabled 已禁用
+    status: Mapped[str] = mapped_column(String(16), default="active")
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def role(self) -> str:
+        return "admin" if self.is_admin else "user"
 
 
 class Provider(Base):
@@ -63,6 +70,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), default="新对话")
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
     model: Mapped[str] = mapped_column(String(255), default="")
@@ -100,6 +108,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(32), default="image")  # image / video / tts
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/running/succeeded/failed/cancelled
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
@@ -121,6 +130,7 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(16), default="image")
     source: Mapped[str] = mapped_column(String(16), default="generated")  # generated / upload
     filename: Mapped[str] = mapped_column(String(255))
@@ -141,8 +151,12 @@ class PromptTemplate(Base):
     __tablename__ = "prompts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 为空表示公共模板（内置或管理员共享），所有用户可见
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    group: Mapped[str] = mapped_column(String(32), default="")  # 分组，用于筛选
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     title: Mapped[str] = mapped_column(String(255))
-    category: Mapped[str] = mapped_column(String(32), default="image")  # image / chat（对话角色）
+    category: Mapped[str] = mapped_column(String(32), default="image")  # chat（对话角色）/ image / video
     icon: Mapped[str] = mapped_column(String(16), default="")
     content: Mapped[str] = mapped_column(Text, default="")
     negative: Mapped[str] = mapped_column(Text, default="")

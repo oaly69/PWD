@@ -68,7 +68,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NButton, NDropdown, NLayout, NLayoutSider, NMenu } from 'naive-ui'
 import {
   AudioLines, BookText, ChevronDown, Film, GalleryHorizontalEnd, Image as ImageIcon, LayoutDashboard, LogOut, Menu,
-  MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun,
+  MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plug, Settings, Sun, Users,
 } from 'lucide-vue-next'
 import TaskCenter from '../components/TaskCenter.vue'
 import { api } from '../api'
@@ -88,7 +88,7 @@ const collapsed = computed(() => (isMobile.value ? false : desktopCollapsed.valu
 const icon = (C) => () => h(C, { size: 18 })
 const link = (to, label) => () => h(RouterLink, { to }, { default: () => label })
 
-const menuOptions = [
+const menuOptions = computed(() => [
   { label: link('/', '工作台'), key: '/', icon: icon(LayoutDashboard) },
   {
     type: 'group', label: '创作', key: 'create',
@@ -109,11 +109,16 @@ const menuOptions = [
   {
     type: 'group', label: '系统', key: 'system',
     children: [
-      { label: link('/providers', '模型服务'), key: '/providers', icon: icon(Plug) },
-      { label: link('/settings', '系统设置'), key: '/settings', icon: icon(Settings) },
+      ...(store.user?.is_admin
+        ? [
+            { label: link('/providers', '模型服务'), key: '/providers', icon: icon(Plug) },
+            { label: link('/users', '用户管理'), key: '/users', icon: icon(Users) },
+          ]
+        : []),
+      { label: link('/settings', store.user?.is_admin ? '系统设置' : '个人设置'), key: '/settings', icon: icon(Settings) },
     ],
   },
-]
+])
 
 const activeKey = computed(() => (route.path === '/' ? '/' : `/${route.path.split('/')[1]}`))
 
@@ -124,11 +129,13 @@ const themeOptions = [
 ]
 const themeIcon = computed(() => ({ light: Sun, dark: Moon, system: Monitor })[themeMode.value])
 
-const userOptions = [
-  { label: '系统设置', key: 'settings', icon: icon(Settings) },
+const userOptions = computed(() => [
+  { key: 'who', type: 'render', render: () => h('div', { class: 'who' }, [h('b', store.user?.username), h('span', store.user?.is_admin ? '管理员' : '普通用户')]) },
+  { type: 'divider', key: 'd0' },
+  { label: store.user?.is_admin ? '系统设置' : '个人设置', key: 'settings', icon: icon(Settings) },
   { type: 'divider', key: 'd' },
   { label: '退出登录', key: 'logout', icon: icon(LogOut) },
-]
+])
 
 function navigate(key) {
   router.push(key)
@@ -144,6 +151,9 @@ async function onUser(key) {
   if (key === 'logout') {
     await api.post('/api/auth/logout')
     store.user = null
+    store.providers = []
+    store.providersLoaded = false
+    store.settings = null
     router.replace('/login')
   }
 }
@@ -181,6 +191,8 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 .avatar-btn:hover { background: var(--panel-2); }
 .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #ff7ac6)); color: #fff; font-weight: 700; font-size: 13px; }
 .uname { font-size: 13px; }
+:global(.who) { display: flex; flex-direction: column; padding: 6px 14px 4px; line-height: 1.5; }
+:global(.who span) { font-size: 12px; color: var(--muted); }
 .content { flex: 1; min-height: 0; overflow: auto; }
 .content.full { overflow: hidden; display: flex; }
 .content.full > :deep(*) { flex: 1; min-width: 0; }

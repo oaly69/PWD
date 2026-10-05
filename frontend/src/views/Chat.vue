@@ -4,9 +4,9 @@
     <aside class="convs" :class="{ open: listOpen }">
       <div class="convs-head">
         <n-button type="primary" class="new-btn" @click="newConv()"><template #icon><Plus :size="16" /></template>新对话</n-button>
-        <n-dropdown trigger="click" :options="roleOptions" scrollable style="max-height: 360px" @select="newFromRole">
-          <n-button secondary title="从角色开始"><template #icon><Bot :size="16" /></template></n-button>
-        </n-dropdown>
+        <n-tooltip><template #trigger>
+          <n-button secondary @click="rolePicker = 'new'"><template #icon><Bot :size="16" /></template></n-button>
+        </template>从角色开始</n-tooltip>
       </div>
       <n-input v-model:value="search" size="small" clearable placeholder="搜索对话" class="search" @update:value="onSearch">
         <template #prefix><Search :size="14" /></template>
@@ -153,9 +153,7 @@
         <div class="field-label" style="margin-top: 16px">角色设定（系统提示词）</div>
         <n-input v-model:value="current.system_prompt" type="textarea" :autosize="{ minRows: 5, maxRows: 14 }" placeholder="例如：你是一名资深短视频编剧……" @blur="saveConv" />
         <div class="row" style="margin-top: 6px">
-          <n-dropdown trigger="click" :options="roleOptions" scrollable @select="applyRole">
-            <n-button size="tiny" secondary>从角色库选择</n-button>
-          </n-dropdown>
+          <n-button size="tiny" secondary @click="rolePicker = 'apply'">从角色库选择</n-button>
         </div>
 
         <div class="section-title">模型参数</div>
@@ -181,18 +179,23 @@
     </n-drawer>
 
     <MediaViewer v-model:index="viewerIndex" :items="viewerItems" />
+
+    <n-modal :show="!!rolePicker" preset="card" :title="rolePicker === 'new' ? '选择一个角色开始对话' : '为当前对话选择角色'" style="width: min(980px, 96vw)" @update:show="(v) => { if (!v) rolePicker = null }">
+      <TemplateBrowser v-if="rolePicker" category="chat" layout="grid" @select="onRolePicked" />
+    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { computed, h, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NSlider, NTooltip } from 'naive-ui'
+import { NButton, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NModal, NSlider, NTooltip } from 'naive-ui'
 import {
   ArrowDown, ArrowUp, Bot, Brain, ChevronDown, CircleAlert, Copy, Ellipsis, FileDown, MessageSquare, PanelLeftOpen,
   Paperclip, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, Square, Trash2, X,
 } from 'lucide-vue-next'
 import EmptyState from '../components/EmptyState.vue'
+import TemplateBrowser from '../components/TemplateBrowser.vue'
 import MediaViewer from '../components/MediaViewer.vue'
 import ModelSelect from '../components/ModelSelect.vue'
 import { api, confirmDialog, streamPost, toast, ui, uploadFile } from '../api'
@@ -213,7 +216,7 @@ const route = useRoute()
 const router = useRouter()
 const convs = ref([])
 const current = ref(null)
-const roles = ref([])
+const rolePicker = ref(null) // 'new' 新建对话 / 'apply' 应用到当前对话
 const search = ref('')
 const input = ref('')
 const pending = ref([])
@@ -249,7 +252,6 @@ const modelKey = computed({
 
 const modelLabel = computed(() => (current.value?.model ? `${providerName(current.value.provider_id)} · ${current.value.model}` : '未选择模型'))
 
-const roleOptions = computed(() => roles.value.map((r) => ({ label: `${r.icon || '🤖'}  ${r.title}`, key: r.id })))
 
 const reasoningOf = (m) => m.reasoning || splitThink(m.content).think
 const bodyOf = (m) => (m.reasoning ? m.content : splitThink(m.content).body)
@@ -328,14 +330,14 @@ async function newConv(body = {}) {
   focusInput()
 }
 
-function newFromRole(id) {
-  const r = roles.value.find((x) => x.id === id)
-  if (r) newConv({ title: r.title, icon: r.icon, system_prompt: r.content })
+function onRolePicked(r) {
+  const mode = rolePicker.value
+  rolePicker.value = null
+  if (mode === 'new') newConv({ title: r.title, icon: r.icon, system_prompt: r.content })
+  else applyRole(r)
 }
 
-function applyRole(id) {
-  const r = roles.value.find((x) => x.id === id)
-  if (!r) return
+function applyRole(r) {
   current.value.system_prompt = r.content
   current.value.icon = r.icon || current.value.icon
   saveConv()
@@ -529,7 +531,6 @@ watch(() => route.query.q, async (q) => {
 
 onMounted(async () => {
   await loadProviders()
-  roles.value = await api.get('/api/prompts?category=chat')
   await loadConvs()
   if (route.query.q) {
     // 来自工作台的快捷提问：新建对话并直接发送
@@ -541,9 +542,6 @@ onMounted(async () => {
   else if (convs.value.length) await open(convs.value[0].id)
 })
 
-onActivated(async () => {
-  roles.value = await api.get('/api/prompts?category=chat', { silent: true }).catch(() => roles.value)
-})
 </script>
 
 <style scoped>

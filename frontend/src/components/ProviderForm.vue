@@ -42,7 +42,7 @@
       <div v-if="result" class="result" :class="result.ok ? 'ok' : 'err'">{{ result.message }}</div>
       <div class="model-grid">
         <div v-for="cap in CAPS" :key="cap.key">
-          <div class="cap-label"><component :is="cap.icon" :size="14" /> {{ cap.label }}</div>
+          <div class="cap-label"><component :is="cap.icon" :size="14" /> {{ cap.label }}<span v-if="form[cap.key].length" class="muted">（{{ form[cap.key].length }}）</span></div>
           <n-select
             v-model:value="form[cap.key]"
             multiple
@@ -50,7 +50,6 @@
             tag
             :options="remoteOptions"
             :placeholder="cap.placeholder"
-            max-tag-count="responsive"
           />
         </div>
       </div>
@@ -265,7 +264,8 @@ defineExpose({
 .presets .muted { margin-right: 4px; }
 .preset { padding: 4px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel); color: var(--text-2); cursor: pointer; font-size: 12.5px; }
 .preset:hover, .preset.active { border-color: var(--primary); color: var(--primary); }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.grid2 > *, .model-grid > * { min-width: 0; }
 .kind-seg { display: flex; }
 .kind-seg :deep(.n-radio-button) { flex: 1; text-align: center; }
 .field { margin-bottom: 14px; }
@@ -275,12 +275,18 @@ defineExpose({
 .result { font-size: 13px; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
 .result.ok { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
 .result.err { background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); word-break: break-word; }
-.model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+/* 模型名很长时标签内省略，避免撑开选择框 */
+.model-grid :deep(.n-base-selection-tag-wrapper) { max-width: 100%; }
+.model-grid :deep(.n-tag) { max-width: 100%; }
+.model-grid :deep(.n-tag__content) { overflow: hidden; text-overflow: ellipsis; }
+/* 标签自动换行，过多时在框内滚动 */
+.model-grid :deep(.n-base-selection-tags) { max-height: 132px; overflow-y: auto; }
 .cap-label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); margin-bottom: 5px; font-weight: 500; }
 .adv { margin-top: 18px; }
 .wf { border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
 .wf-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .mono :deep(textarea) { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 code { font-size: 11.5px; background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
-@media (max-width: 640px) { .grid2, .model-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .grid2, .model-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

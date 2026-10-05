@@ -10,6 +10,8 @@ export const store = reactive({
   activeTasks: [],
 })
 
+export const isAdmin = () => !!store.user?.is_admin
+
 export async function loadProviders(force = false) {
   if (store.providersLoaded && !force) return store.providers
   store.providers = await api.get('/api/providers')

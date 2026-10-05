@@ -21,9 +21,11 @@ DEFAULTS: dict[str, Any] = {
     "enhance_provider_id": None,
     "enhance_model": "",
     "default_system_prompt": "",
+    "allow_register": False,  # 是否开放注册
+    "register_need_approval": True,  # 注册后是否需要管理员审核
 }
 
-PUBLIC_KEYS = {"site_name", "installed"}
+PUBLIC_KEYS = {"site_name", "installed", "allow_register"}
 EDITABLE_KEYS = set(DEFAULTS) - {"installed"}
 
 

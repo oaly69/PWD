@@ -120,7 +120,7 @@ async def _run(task_id: int) -> None:
                     kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else task.kind
                     w, h = image_size(data) if kind == "image" else (0, 0)
                     db.add(Asset(
-                        kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
+                        user_id=task.user_id, kind=kind, source="generated", filename=filename, mime=mime, size=len(data),
                         width=w, height=h, prompt=task.prompt, model=task.model, task_id=task.id,
                     ))
                 task.status = "succeeded"

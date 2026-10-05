@@ -4,27 +4,33 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import PromptTemplate, Provider
+from ..models import PromptTemplate, Provider, User
 from ..services import openai_compat
 from ..site import get_setting
 
-router = APIRouter(prefix="/api/prompts", tags=["prompts"], dependencies=[Depends(current_user)])
+router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 
 
 class PromptIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
-    category: Literal["image", "chat"] = "image"
+    category: Literal["image", "video", "chat"] = "image"
     content: str = ""
     negative: str = ""
     icon: str = Field("", max_length=16)
+    group: str = Field("", max_length=32)
+    shared: bool = False  # 管理员可设为公共模板，所有用户可见
 
 
 def prompt_out(p: PromptTemplate) -> dict:
-    return {"id": p.id, "title": p.title, "category": p.category, "content": p.content, "negative": p.negative, "icon": p.icon or ""}
+    return {
+        "id": p.id, "title": p.title, "category": p.category, "content": p.content, "negative": p.negative,
+        "icon": p.icon or "", "group": p.group or "", "shared": p.user_id is None, "builtin": bool(p.builtin),
+    }
 
 
 ENHANCE_SYSTEM = {
@@ -51,7 +57,7 @@ class EnhanceIn(BaseModel):
 
 
 @router.post("/enhance")
-async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db)):
+async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db), _user: User = Depends(current_user)):
     """使用对话模型优化 / 扩写提示词。"""
     pid, model = get_setting(db, "enhance_provider_id"), get_setting(db, "enhance_model")
     if not (pid and model):
@@ -72,38 +78,52 @@ async def enhance_prompt(body: EnhanceIn, db: Session = Depends(get_db)):
     return {"prompt": text.strip().strip('"“”')}
 
 
+def _visible(db: Session, user: User):
+    return db.query(PromptTemplate).filter(or_(PromptTemplate.user_id.is_(None), PromptTemplate.user_id == user.id))
+
+
+def _editable(db: Session, pid: int, user: User) -> PromptTemplate:
+    p = db.get(PromptTemplate, pid)
+    if p is None or (p.user_id is not None and p.user_id != user.id):
+        raise HTTPException(status_code=404, detail="提示词不存在")
+    if p.user_id is None and not user.is_admin:
+        raise HTTPException(status_code=403, detail="公共模板只能由管理员修改，可以先「复制一份」再编辑")
+    return p
+
+
 @router.get("")
-def list_prompts(category: str | None = None, db: Session = Depends(get_db)):
-    q = db.query(PromptTemplate)
+def list_prompts(category: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    q = _visible(db, user)
     if category:
         q = q.filter(PromptTemplate.category == category)
-    return [prompt_out(p) for p in q.order_by(PromptTemplate.id.desc()).all()]
+    # 自己的模板在前，其次公共模板；同类按创建顺序
+    rows = q.order_by(PromptTemplate.user_id.is_(None), PromptTemplate.id).all()
+    return [prompt_out(p) for p in rows]
 
 
 @router.post("")
-def create_prompt(body: PromptIn, db: Session = Depends(get_db)):
-    p = PromptTemplate(**body.model_dump())
+def create_prompt(body: PromptIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    data = body.model_dump(exclude={"shared"})
+    shared = body.shared and user.is_admin
+    p = PromptTemplate(**data, user_id=None if shared else user.id)
     db.add(p)
     db.commit()
     return prompt_out(p)
 
 
 @router.put("/{pid}")
-def update_prompt(pid: int, body: PromptIn, db: Session = Depends(get_db)):
-    p = db.get(PromptTemplate, pid)
-    if p is None:
-        raise HTTPException(status_code=404, detail="提示词不存在")
-    for k, v in body.model_dump().items():
+def update_prompt(pid: int, body: PromptIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    p = _editable(db, pid, user)
+    for k, v in body.model_dump(exclude={"shared"}).items():
         setattr(p, k, v)
+    if user.is_admin and p.user_id in (None, user.id):
+        p.user_id = None if body.shared else user.id
     db.commit()
     return prompt_out(p)
 
 
 @router.delete("/{pid}")
-def delete_prompt(pid: int, db: Session = Depends(get_db)):
-    p = db.get(PromptTemplate, pid)
-    if p is None:
-        raise HTTPException(status_code=404, detail="提示词不存在")
-    db.delete(p)
+def delete_prompt(pid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    db.delete(_editable(db, pid, user))
     db.commit()
     return {"ok": True}

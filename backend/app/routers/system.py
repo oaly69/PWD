@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from ..config import VERSION, settings
 from .. import db as dbmod
 from ..db import get_db
-from ..deps import current_user
-from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, utcnow
+from ..deps import current_user, require_admin
+from ..models import Asset, Conversation, Message, PromptTemplate, Provider, Task, User, utcnow
 from ..site import EDITABLE_KEYS, PUBLIC_KEYS, all_settings, set_setting
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -39,7 +39,7 @@ def get_settings(db: Session = Depends(get_db)):
     return {k: v for k, v in data.items() if k in EDITABLE_KEYS}
 
 
-@router.put("/settings", dependencies=[Depends(current_user)])
+@router.put("/settings", dependencies=[Depends(require_admin)])
 def update_settings(body: dict[str, Any], db: Session = Depends(get_db)):
     unknown = set(body) - EDITABLE_KEYS
     if unknown:
@@ -64,13 +64,15 @@ def _dir_size(path) -> int:
     return total
 
 
-@router.get("/stats", dependencies=[Depends(current_user)])
-def stats(db: Session = Depends(get_db)):
-    by_kind = dict(db.query(Asset.kind, func.count(Asset.id)).group_by(Asset.kind).all())
+@router.get("/stats")
+def stats(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """当前用户的统计；管理员额外返回全站概况（site）。"""
+    mine = Asset.user_id == user.id
+    by_kind = dict(db.query(Asset.kind, func.count(Asset.id)).filter(mine).group_by(Asset.kind).all())
     since = utcnow() - timedelta(days=13)
     daily_rows = (
         db.query(func.date(Asset.created_at), func.count(Asset.id))
-        .filter(Asset.created_at >= since, Asset.source == "generated")
+        .filter(mine, Asset.created_at >= since, Asset.source == "generated")
         .group_by(func.date(Asset.created_at))
         .all()
     )
@@ -80,24 +82,32 @@ def stats(db: Session = Depends(get_db)):
         {"date": (today - timedelta(days=i)).isoformat(), "count": daily_map.get((today - timedelta(days=i)).isoformat(), 0)}
         for i in range(13, -1, -1)
     ]
-    return {
-        "providers": db.query(Provider).count(),
-        "conversations": db.query(Conversation).count(),
-        "messages": db.query(Message).count(),
-        "assets": db.query(Asset).count(),
+    data = {
+        "providers": db.query(Provider).filter(Provider.enabled.is_(True)).count(),
+        "conversations": db.query(Conversation).filter(Conversation.user_id == user.id).count(),
+        "assets": db.query(Asset).filter(mine).count(),
         "images": by_kind.get("image", 0),
         "videos": by_kind.get("video", 0),
         "audios": by_kind.get("audio", 0),
-        "favorites": db.query(Asset).filter(Asset.favorite.is_(True)).count(),
-        "prompts": db.query(PromptTemplate).count(),
-        "tasks_running": db.query(Task).filter(Task.status.in_(["pending", "running"])).count(),
-        "tasks_failed": db.query(Task).filter(Task.status == "failed").count(),
-        "storage_bytes": _dir_size(settings.media_dir),
+        "favorites": db.query(Asset).filter(mine, Asset.favorite.is_(True)).count(),
+        "prompts": db.query(PromptTemplate).filter(PromptTemplate.user_id == user.id).count(),
+        "tasks_running": db.query(Task).filter(Task.user_id == user.id, Task.status.in_(["pending", "running"])).count(),
+        "tasks_failed": db.query(Task).filter(Task.user_id == user.id, Task.status == "failed").count(),
+        "storage_bytes": db.query(func.coalesce(func.sum(Asset.size), 0)).filter(mine).scalar(),
         "daily": daily,
     }
+    if user.is_admin:
+        data["site"] = {
+            "users": db.query(User).count(),
+            "pending_users": db.query(User).filter(User.status == "pending").count(),
+            "assets": db.query(Asset).count(),
+            "messages": db.query(Message).count(),
+            "storage_bytes": _dir_size(settings.media_dir),
+        }
+    return data
 
 
-@router.get("/system/backup", dependencies=[Depends(current_user)])
+@router.get("/system/backup", dependencies=[Depends(require_admin)])
 def backup(background: BackgroundTasks, include_media: bool = True):
     """导出完整备份：数据库快照 + 会话密钥 +（可选）全部媒体文件。"""
     tmpdir = tempfile.mkdtemp(prefix="pwd-backup-")

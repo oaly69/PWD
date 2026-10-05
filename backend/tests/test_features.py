@@ -270,7 +270,8 @@ def test_upload_and_media_traversal(installed):
 def test_prompts_seeded_and_crud(installed):
     c = installed
     roles = c.get("/api/prompts", params={"category": "chat"}).json()
-    assert len(roles) >= 3 and all(r["icon"] for r in roles)
+    assert len(roles) == 100 and all(r["icon"] and r["shared"] and r["builtin"] for r in roles)
+    assert len(c.get("/api/prompts", params={"category": "video"}).json()) == 100
     p = c.post("/api/prompts", json={"title": "赛博", "content": "cyberpunk", "icon": "🌃"}).json()
     assert p["icon"] == "🌃"
     assert c.put(f"/api/prompts/{p['id']}", json={"title": "新", "content": "x"}).json()["title"] == "新"
@@ -326,7 +327,19 @@ def test_provider_test_draft_uses_saved_key(installed, monkeypatch):
     assert seen["key"] == "new"
 
 
-def test_upgraded_instance_gets_builtin_prompts_once(installed):
+def test_builtin_templates_seeded():
+    from app.seed import builtin_templates
+
+    data = builtin_templates()
+    for category in ("chat", "image", "video"):
+        items = data[category]
+        assert len(items) >= 100
+        assert len({i["title"] for i in items}) == len(items)
+        assert all(i["content"] and i["group"] and i["icon"] for i in items)
+
+
+def test_upgrade_from_v02_prompts(installed):
+    """模拟 v0.2：内置示例与用户自建模板都没有归属，升级后示例被替换、自建模板归管理员私有。"""
     from app import db
     from app.models import PromptTemplate
     from app.seed import seed_if_upgraded
@@ -334,10 +347,16 @@ def test_upgraded_instance_gets_builtin_prompts_once(installed):
 
     with db.new_session() as s:
         s.query(PromptTemplate).delete()
-        set_setting(s, "builtin_seeded", False)
+        s.add(PromptTemplate(title="分镜编剧", category="chat", content="旧内容"))
+        s.add(PromptTemplate(title="我的私藏", category="image", content="自己写的"))
+        set_setting(s, "builtin_seed_version", 0)
         s.commit()
         seed_if_upgraded(s)
+        mine = s.query(PromptTemplate).filter_by(title="我的私藏").one()
+        assert mine.user_id == 1
+        storyboard = s.query(PromptTemplate).filter_by(title="分镜编剧").all()
+        assert len(storyboard) == 1 and storyboard[0].builtin and storyboard[0].content != "旧内容"
         n = s.query(PromptTemplate).count()
-        assert n >= 10
-        seed_if_upgraded(s)
+        assert n == 301
+        seed_if_upgraded(s)  # 再次执行不会重复添加
         assert s.query(PromptTemplate).count() == n

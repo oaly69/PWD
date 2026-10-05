@@ -1,9 +1,9 @@
 <template>
   <div class="page settings">
-    <div class="page-head"><div><h1>系统设置</h1><div class="sub">PWD v{{ store.site.version }}</div></div></div>
+    <div class="page-head"><div><h1>{{ admin ? '系统设置' : '个人设置' }}</h1><div class="sub">PWD v{{ store.site.version }}</div></div></div>
 
-    <n-tabs type="line" :placement="isMobile ? 'top' : 'left'" class="tabs" default-value="general">
-      <n-tab-pane name="general" tab="通用">
+    <n-tabs type="line" :placement="isMobile ? 'top' : 'left'" class="tabs" :default-value="admin ? 'general' : 'appearance'">
+      <n-tab-pane v-if="admin" name="general" tab="通用">
         <section class="sec">
           <h3>站点</h3>
           <div class="field-label">站点名称</div>
@@ -16,7 +16,7 @@
         <n-button type="primary" :loading="saving" @click="save">保存</n-button>
       </n-tab-pane>
 
-      <n-tab-pane name="models" tab="默认模型">
+      <n-tab-pane v-if="admin" name="models" tab="默认模型">
         <section class="sec">
           <h3>默认模型</h3>
           <p class="muted desc">新建对话和打开创作页时默认选中的模型。</p>
@@ -65,19 +65,18 @@
             <n-form-item label="确认新密码"><n-input v-model:value="pwd.confirm" type="password" show-password-on="click" /></n-form-item>
             <n-button type="primary" :disabled="!pwd.old_password || pwd.new_password.length < 8" @click="changePassword">修改密码</n-button>
           </n-form>
-          <p class="muted desc">修改密码后，其他设备上的登录会立即失效。</p>
+          <p class="muted desc" style="margin-top: 12px">当前账号：{{ store.user?.username }}（{{ admin ? '管理员' : '普通用户' }}）。修改密码后，其他设备上的登录会立即失效。</p>
         </section>
       </n-tab-pane>
 
-      <n-tab-pane name="data" tab="数据与备份">
+      <n-tab-pane v-if="admin" name="data" tab="数据与备份">
         <section class="sec">
-          <h3>存储概览</h3>
-          <div v-if="stats" class="stat-grid">
-            <div class="stat"><b>{{ stats.images }}</b><span>图片</span></div>
-            <div class="stat"><b>{{ stats.videos }}</b><span>视频</span></div>
-            <div class="stat"><b>{{ stats.audios }}</b><span>音频</span></div>
-            <div class="stat"><b>{{ stats.conversations }}</b><span>对话</span></div>
-            <div class="stat"><b>{{ formatBytes(stats.storage_bytes) }}</b><span>媒体占用</span></div>
+          <h3>全站概览</h3>
+          <div v-if="stats?.site" class="stat-grid">
+            <div class="stat"><b>{{ stats.site.users }}</b><span>用户</span></div>
+            <div class="stat"><b>{{ stats.site.assets }}</b><span>作品</span></div>
+            <div class="stat"><b>{{ stats.site.messages }}</b><span>对话消息</span></div>
+            <div class="stat"><b>{{ formatBytes(stats.site.storage_bytes) }}</b><span>媒体占用</span></div>
           </div>
         </section>
         <section class="sec">
@@ -130,6 +129,7 @@ const THEMES = [
   { value: 'system', label: '跟随系统' },
 ]
 
+const admin = computed(() => !!store.user?.is_admin)
 const s = reactive({ site_name: '', default_system_prompt: '' })
 const keys = reactive({ chat: '', image: '', video: '', tts: '', enhance: '' })
 const pwd = reactive({ old_password: '', new_password: '', confirm: '' })
@@ -177,6 +177,7 @@ async function changePassword() {
 
 onMounted(async () => {
   window.addEventListener('resize', onResize)
+  if (!admin.value) return
   await load()
   stats.value = await api.get('/api/stats')
 })

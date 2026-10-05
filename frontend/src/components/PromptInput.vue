@@ -12,16 +12,12 @@
       @keydown="onKeydown"
     />
     <div class="toolbar">
-      <n-popselect
-        v-if="templates.length"
-        :options="templateOptions"
-        trigger="click"
-        scrollable
-        size="small"
-        @update:value="useTemplate"
-      >
-        <n-button quaternary size="tiny"><template #icon><BookText :size="14" /></template>模板</n-button>
-      </n-popselect>
+      <n-popover v-model:show="pickerOpen" trigger="click" placement="bottom-start" :width="380" style="padding: 12px">
+        <template #trigger>
+          <n-button quaternary size="tiny"><template #icon><BookText :size="14" /></template>模板</n-button>
+        </template>
+        <TemplateBrowser :category="kind === 'video' ? 'video' : 'image'" @select="useTemplate" />
+      </n-popover>
       <n-tooltip>
         <template #trigger>
           <n-button quaternary size="tiny" :loading="enhancing" :disabled="!modelValue.trim()" @click="enhance">
@@ -41,10 +37,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { NButton, NInput, NPopselect, NTooltip } from 'naive-ui'
+import { ref } from 'vue'
+import { NButton, NInput, NPopover, NTooltip } from 'naive-ui'
 import { BookText, Undo2, WandSparkles, X } from 'lucide-vue-next'
 import { api, toast } from '../api'
+import TemplateBrowser from './TemplateBrowser.vue'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -58,13 +55,10 @@ const emit = defineEmits(['update:modelValue', 'template', 'submit'])
 const focused = ref(false)
 const enhancing = ref(false)
 const undoValue = ref(null)
-const templates = ref([])
+const pickerOpen = ref(false)
 
-const templateOptions = computed(() => templates.value.map((t) => ({ label: `${t.icon || '📝'} ${t.title}`, value: t.id })))
-
-function useTemplate(id) {
-  const t = templates.value.find((x) => x.id === id)
-  if (!t) return
+function useTemplate(t) {
+  pickerOpen.value = false
   undoValue.value = props.modelValue
   emit('update:modelValue', t.content)
   emit('template', t)
@@ -94,9 +88,6 @@ function onKeydown(e) {
   }
 }
 
-onMounted(async () => {
-  if (props.kind === 'image' || props.kind === 'video') templates.value = await api.get('/api/prompts?category=image')
-})
 </script>
 
 <style scoped>

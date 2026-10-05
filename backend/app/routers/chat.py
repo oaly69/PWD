@@ -12,13 +12,13 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db, new_session
 from ..deps import current_user
-from ..models import Asset, Conversation, Message, Provider, utcnow
+from ..models import Asset, Conversation, Message, Provider, User, utcnow
 from ..services import openai_compat
 from ..services.media import downscale_for_llm, read_media, to_data_uri
 from ..site import get_setting
 from .assets import asset_out
 
-router = APIRouter(prefix="/api/conversations", tags=["chat"], dependencies=[Depends(current_user)])
+router = APIRouter(prefix="/api/conversations", tags=["chat"])
 
 DEFAULT_CONTEXT = 30  # 默认携带的历史消息条数
 
@@ -55,9 +55,9 @@ def conv_out(c: Conversation, db: Session | None = None, with_messages: bool = F
     return data
 
 
-def _get(db: Session, cid: int) -> Conversation:
+def _get(db: Session, cid: int, user: User) -> Conversation:
     c = db.get(Conversation, cid)
-    if c is None:
+    if c is None or c.user_id != user.id:
         raise HTTPException(status_code=404, detail="对话不存在")
     return c
 
@@ -73,19 +73,20 @@ class ConversationIn(BaseModel):
 
 
 @router.get("")
-def list_conversations(q: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(Conversation)
+def list_conversations(q: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    query = db.query(Conversation).filter(Conversation.user_id == user.id)
     if q:
         like = f"%{q}%"
-        matched = db.query(Message.conversation_id).filter(Message.content.like(like))
+        matched = db.query(Message.conversation_id).join(Conversation).filter(Conversation.user_id == user.id, Message.content.like(like))
         query = query.filter(or_(Conversation.title.like(like), Conversation.id.in_(matched)))
     rows = query.order_by(Conversation.pinned.desc(), Conversation.updated_at.desc()).limit(500).all()
     return [conv_out(c) for c in rows]
 
 
 @router.post("")
-def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
+def create_conversation(body: ConversationIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     c = Conversation(
+        user_id=user.id,
         title=body.title or "新对话",
         icon=body.icon or "",
         provider_id=body.provider_id if body.provider_id is not None else get_setting(db, "default_chat_provider_id"),
@@ -99,13 +100,13 @@ def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
 
 
 @router.get("/{cid}")
-def get_conversation(cid: int, db: Session = Depends(get_db)):
-    return conv_out(_get(db, cid), db, with_messages=True)
+def get_conversation(cid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return conv_out(_get(db, cid, user), db, with_messages=True)
 
 
 @router.patch("/{cid}")
-def update_conversation(cid: int, body: ConversationIn, db: Session = Depends(get_db)):
-    c = _get(db, cid)
+def update_conversation(cid: int, body: ConversationIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    c = _get(db, cid, user)
     for field in ("title", "icon", "pinned", "provider_id", "model", "system_prompt", "params"):
         value = getattr(body, field)
         if value is not None:
@@ -115,14 +116,15 @@ def update_conversation(cid: int, body: ConversationIn, db: Session = Depends(ge
 
 
 @router.delete("/{cid}")
-def delete_conversation(cid: int, db: Session = Depends(get_db)):
-    db.delete(_get(db, cid))
+def delete_conversation(cid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    db.delete(_get(db, cid, user))
     db.commit()
     return {"ok": True}
 
 
 @router.delete("/{cid}/messages/{mid}")
-def delete_message(cid: int, mid: int, db: Session = Depends(get_db)):
+def delete_message(cid: int, mid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    _get(db, cid, user)
     m = db.get(Message, mid)
     if m is None or m.conversation_id != cid:
         raise HTTPException(status_code=404, detail="消息不存在")
@@ -137,8 +139,8 @@ class MessagePatch(BaseModel):
 
 
 @router.patch("/{cid}/messages/{mid}")
-def edit_message(cid: int, mid: int, body: MessagePatch, db: Session = Depends(get_db)):
-    c = _get(db, cid)
+def edit_message(cid: int, mid: int, body: MessagePatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    c = _get(db, cid, user)
     m = db.get(Message, mid)
     if m is None or m.conversation_id != cid:
         raise HTTPException(status_code=404, detail="消息不存在")
@@ -152,8 +154,8 @@ def edit_message(cid: int, mid: int, body: MessagePatch, db: Session = Depends(g
 
 
 @router.get("/{cid}/export", response_class=PlainTextResponse)
-def export_conversation(cid: int, db: Session = Depends(get_db)):
-    c = _get(db, cid)
+def export_conversation(cid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    c = _get(db, cid, user)
     lines = [f"# {c.title}", ""]
     if c.system_prompt.strip():
         lines += ["> **角色设定**", ">", *[f"> {ln}" for ln in c.system_prompt.splitlines()], ""]
@@ -201,8 +203,8 @@ def _build_history(db: Session, c: Conversation) -> list[dict[str, Any]]:
 
 
 @router.post("/{cid}/messages")
-async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db)):
-    c = _get(db, cid)
+async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    c = _get(db, cid, user)
     provider = db.get(Provider, c.provider_id) if c.provider_id else None
     if provider is None or provider.kind != "openai":
         raise HTTPException(status_code=400, detail="请先为对话选择一个 OpenAI 兼容的模型服务")
@@ -216,6 +218,10 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db)):
     else:
         if not body.content.strip() and not body.attachments:
             raise HTTPException(status_code=400, detail="消息内容不能为空")
+        if body.attachments:
+            owned = db.query(Asset.id).filter(Asset.id.in_(body.attachments), Asset.user_id == user.id).count()
+            if owned != len(set(body.attachments)):
+                raise HTTPException(status_code=400, detail="附件不存在")
         db.add(Message(conversation_id=c.id, role="user", content=body.content, attachments=body.attachments))
         if c.title == "新对话":
             first = body.content.strip().splitlines()[0] if body.content.strip() else "图片对话"
@@ -266,9 +272,9 @@ async def send_message(cid: int, body: SendIn, db: Session = Depends(get_db)):
 
 
 @router.post("/{cid}/title")
-async def auto_title(cid: int, db: Session = Depends(get_db)):
+async def auto_title(cid: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """让模型根据对话内容生成简短标题。"""
-    c = _get(db, cid)
+    c = _get(db, cid, user)
     provider = db.get(Provider, c.provider_id) if c.provider_id else None
     if provider is None or not c.model or not c.messages:
         raise HTTPException(status_code=400, detail="对话为空或未选择模型")

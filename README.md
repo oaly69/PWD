@@ -21,7 +21,8 @@
 | 模块 | 能力 |
 |---|---|
 | 🖼️ **作品库** | 按真实比例排布的瀑布流、无限滚动；按类型 / 来源 / 模型 / 收藏筛选与搜索；**多选批量收藏、打包下载、删除**；大图查看器展示完整生成参数，可「复用参数」「作为参考图」「生成视频」；拖拽上传素材；自动生成缩略图 |
-| 📝 **提示词与角色** | 对话角色（带图标的系统提示词）与图像提示词模板，内置常用示例；创作页一键调用 |
+| 📝 **提示词与角色** | 内置 **100 个对话角色、100 个图像提示词、100 个视频提示词**，按分组筛选与搜索；可保存个人模板，管理员可共享模板给所有用户；创作页与对话页一键调用 |
+| 👥 **多用户** | 管理员 / 普通用户两种角色；管理员可添加用户、重置密码、禁用、删除；可开放注册并设置是否需要审核；各用户的对话、作品、任务、个人模板相互隔离，模型服务由管理员统一配置 |
 | 🔌 **模型服务** | 任意 **OpenAI 兼容接口**（OpenAI、DeepSeek、硅基流动、阿里百炼、火山方舟、OpenRouter、Ollama、One API / New API…）与 **ComfyUI**；一键获取模型列表并**按名称自动归类**为对话 / 图像 / 视频 / 语音；ComfyUI 支持多工作流、导入 JSON、`{{image}}` 参考图占位符 |
 | 🧭 **任务中心** | 顶栏实时显示进行中的生成任务，可取消；任务完成 / 失败时弹出通知；失败任务一键重试 |
 | ⚙️ **系统** | 浅色 / 深色 / 跟随系统主题与 5 种主题色；各能力默认模型、提示词优化模型；修改密码；**一键完整备份**（数据库快照 + 媒体文件） |
@@ -128,7 +129,10 @@ location / {
 
 ## 从旧版本升级
 
-直接拉取新镜像并重建容器即可，**数据库会在启动时自动迁移**（只增加字段，不改动已有数据），登录状态与历史数据全部保留；旧版本的实例会自动补充内置的角色与提示词示例。
+直接拉取新镜像并重建容器即可，**数据库会在启动时自动迁移**（只增加字段，不改动已有数据），登录状态与历史数据全部保留：
+
+- 升级到 v0.3（多用户）时，原有的对话、作品与任务自动归属到原管理员；原管理员自建的提示词模板转为管理员私有，旧版内置示例替换为新版内置模板。
+- 新增的内置模板会自动补充，已删除的内置模板不会被加回来。
 
 ```bash
 docker compose pull && docker compose up -d
@@ -277,8 +281,9 @@ API 文档：`http://localhost:8080/api/docs`
 backend/app/
 ├── main.py              # 应用入口、SPA 托管
 ├── migrate.py           # 启动时自动补齐数据库字段
-├── seed.py              # 内置角色与提示词示例
-├── routers/             # install / auth / providers / chat / generate / assets / prompts / system
+├── seed.py              # 内置模板写入与升级补充
+├── seed_data/           # 内置模板数据（对话角色 / 图像 / 视频提示词各 100 个）
+├── routers/             # install / auth / users / providers / chat / generate / assets / prompts / system
 └── services/            # openai_compat（对话/图像/视频/语音）/ comfyui / tasks（后台任务）/ media（缩略图）
 frontend/src/
 ├── views/               # 工作台、对话、图像 / 视频 / 语音工作台、作品库、提示词与角色、模型服务、设置
@@ -295,10 +300,12 @@ frontend/src/
 - [ ] 局部重绘（蒙版编辑）、图像放大
 - [ ] 项目 / 分镜管理（参考 [Slate](https://github.com/coracoo/Slate) 的制作线思路）
 - [ ] 知识库 / 文件对话
-- [ ] 多用户与配额
+- [x] 多用户与管理员、注册审核
+- [ ] 用户组、模型权限与用量配额
 
 ## 参考
 
 - [coracoo/Slate](https://github.com/coracoo/Slate)：面向短片制作的本地 AIGC 工作台
 - [LobeChat](https://github.com/lobehub/lobe-chat)、[Open WebUI](https://github.com/open-webui/open-webui)：对话体验
 - [Fooocus](https://github.com/lllyasviel/Fooocus)、[InvokeAI](https://github.com/invoke-ai/InvokeAI)：生图工作台与风格预设
+- 内置模板的分类与写法参考了 [awesome-chatgpt-prompts-zh](https://github.com/PlexPt/awesome-chatgpt-prompts-zh)、[wonderful-prompts](https://github.com/langgptai/wonderful-prompts)、[awesome-video-prompts](https://github.com/songguoxs/awesome-video-prompts)、[awesome-ai-video-prompts](https://github.com/geekjourneyx/awesome-ai-video-prompts)、[awesome-nano-banana-pro-prompts](https://github.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts)，模板内容为原创编写

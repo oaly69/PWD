@@ -7,13 +7,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, require_admin
+from ..models import User
 from ..models import Provider
 from ..security import mask_secret
 from ..services import comfyui, openai_compat
 from ..services.openai_compat import ProviderError
 
-router = APIRouter(prefix="/api/providers", tags=["providers"], dependencies=[Depends(current_user)])
+router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
 class ProviderIn(BaseModel):
@@ -125,12 +126,31 @@ def _get(db: Session, provider_id: int) -> Provider:
     return p
 
 
+def provider_public(p: Provider) -> dict[str, Any]:
+    """普通用户可见的信息：只包含选择模型所需的字段，不暴露地址、Key 与工作流。"""
+    extra = p.extra or {}
+    return {
+        "id": p.id,
+        "name": p.name,
+        "kind": p.kind,
+        "enabled": p.enabled,
+        "chat_models": p.chat_models or [],
+        "image_models": p.image_models or [],
+        "video_models": p.video_models or [],
+        "tts_models": p.tts_models or [],
+        "extra": {k: extra[k] for k in ("image_edit_mode", "video_api") if k in extra},
+    }
+
+
 @router.get("")
-def list_providers(db: Session = Depends(get_db)):
-    return [provider_out(p) for p in db.query(Provider).order_by(Provider.id).all()]
+def list_providers(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = db.query(Provider).order_by(Provider.id).all()
+    if user.is_admin:
+        return [provider_out(p) for p in rows]
+    return [provider_public(p) for p in rows if p.enabled]
 
 
-@router.get("/comfyui/example")
+@router.get("/comfyui/example", dependencies=[Depends(require_admin)])
 def comfyui_example():
     return {"workflows": {"SDXL 文生图": comfyui.EXAMPLE_WORKFLOW}}
 
@@ -139,7 +159,7 @@ class DraftTestIn(ProviderIn):
     id: int | None = None  # 编辑已有服务且未填写新 Key 时，沿用已保存的 Key
 
 
-@router.post("/test-draft")
+@router.post("/test-draft", dependencies=[Depends(require_admin)])
 async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
     """测试尚未保存的配置（用于表单中的“测试连接 / 获取模型”）。"""
     tmp = Provider()
@@ -150,7 +170,7 @@ async def test_draft(body: DraftTestIn, db: Session = Depends(get_db)):
     return await test_provider_connection(tmp)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin)])
 def create_provider(body: ProviderIn, db: Session = Depends(get_db)):
     p = Provider()
     apply_provider(p, body)
@@ -159,7 +179,7 @@ def create_provider(body: ProviderIn, db: Session = Depends(get_db)):
     return provider_out(p)
 
 
-@router.put("/{provider_id}")
+@router.put("/{provider_id}", dependencies=[Depends(require_admin)])
 def update_provider(provider_id: int, body: ProviderIn, db: Session = Depends(get_db)):
     p = _get(db, provider_id)
     apply_provider(p, body)
@@ -167,19 +187,19 @@ def update_provider(provider_id: int, body: ProviderIn, db: Session = Depends(ge
     return provider_out(p)
 
 
-@router.delete("/{provider_id}")
+@router.delete("/{provider_id}", dependencies=[Depends(require_admin)])
 def delete_provider(provider_id: int, db: Session = Depends(get_db)):
     db.delete(_get(db, provider_id))
     db.commit()
     return {"ok": True}
 
 
-@router.post("/{provider_id}/test")
+@router.post("/{provider_id}/test", dependencies=[Depends(require_admin)])
 async def test_provider(provider_id: int, db: Session = Depends(get_db)):
     return await test_provider_connection(_get(db, provider_id))
 
 
-@router.get("/{provider_id}/remote-models")
+@router.get("/{provider_id}/remote-models", dependencies=[Depends(require_admin)])
 async def remote_models(provider_id: int, db: Session = Depends(get_db)):
     p = _get(db, provider_id)
     if p.kind != "openai":
