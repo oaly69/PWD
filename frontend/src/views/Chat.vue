@@ -265,7 +265,7 @@
             <span class="muted model-label ellipsis">{{ compareKeys.length ? compareKeys.map((k) => splitModelKey(k)[1]).join(' · ') : modelLabel }}</span>
             <span class="spacer" />
             <n-button v-if="sending" type="error" secondary circle @click="stop"><template #icon><Square :size="14" fill="currentColor" /></template></n-button>
-            <n-button v-else type="primary" circle :disabled="!input.trim() && !pending.length && !pendingFiles.length" @click="send"><template #icon><ArrowUp :size="18" /></template></n-button>
+            <n-button v-else type="primary" circle class="send-btn" :disabled="!input.trim() && !pending.length && !pendingFiles.length" @click="send"><template #icon><ArrowUp :size="18" /></template></n-button>
           </div>
         </div>
       </div>

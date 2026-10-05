@@ -8,7 +8,8 @@ test.describe.configure({ mode: 'serial' })
 let page
 const errors = []
 
-const composerIdle = () => expect(page.locator('.composer button.n-button--primary-type')).toBeVisible({ timeout: 60_000 })
+// 回复结束：停止按钮消失、发送按钮重新出现
+const composerIdle = () => expect(page.locator('.composer .send-btn')).toBeVisible({ timeout: 60_000 })
 const tasksIdle = () => expect.poll(async () => (await (await page.request.get('/api/tasks?status=active')).json()).length, { timeout: 60_000 }).toBe(0)
 const md = (name, text) => ({ name, mimeType: 'text/markdown', buffer: Buffer.from(text) })
 
