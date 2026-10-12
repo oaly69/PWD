@@ -115,7 +115,9 @@ const apiHint = computed(() => {
   const p = currentProvider()
   if (!p) return ''
   if (p.kind === 'comfyui') return '使用 ComfyUI 视频工作流'
-  return p.extra?.video_api === 'siliconflow' ? '接口：硅基流动 /video/submit' : '接口：OpenAI Sora 风格 /videos'
+  const api = p.extra?.video_api === 'openai' && p.base_url?.includes('volces.com') ? 'ark' : p.extra?.video_api
+  if (api === 'ark') return '接口：火山方舟 Seedance（首帧图可选，比例跟随首帧）'
+  return api === 'siliconflow' ? '接口：硅基流动 /video/submit' : '接口：OpenAI Sora 风格 /videos'
 })
 
 function reuse(t) {

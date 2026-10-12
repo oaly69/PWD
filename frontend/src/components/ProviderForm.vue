@@ -148,6 +148,7 @@ const EDIT_MODES = [
 const VIDEO_APIS = [
   { label: 'OpenAI Sora 风格（/videos）', value: 'openai' },
   { label: '硅基流动（/video/submit）', value: 'siliconflow' },
+  { label: '火山方舟 Seedance（/contents/generations/tasks）', value: 'ark' },
 ]
 
 const form = props.form

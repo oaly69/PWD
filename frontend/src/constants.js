@@ -62,7 +62,7 @@ export const PROVIDER_PRESETS = [
   { name: 'DeepSeek', kind: 'openai', base_url: 'https://api.deepseek.com/v1', extra: {} },
   { name: '硅基流动', kind: 'openai', base_url: 'https://api.siliconflow.cn/v1', extra: { image_edit_mode: 'field', video_api: 'siliconflow' } },
   { name: '阿里百炼', kind: 'openai', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', extra: {} },
-  { name: '火山方舟', kind: 'openai', base_url: 'https://ark.cn-beijing.volces.com/api/v3', extra: {} },
+  { name: '火山方舟', kind: 'openai', base_url: 'https://ark.cn-beijing.volces.com/api/v3', extra: { image_edit_mode: 'field', video_api: 'ark' } },
   { name: 'OpenRouter', kind: 'openai', base_url: 'https://openrouter.ai/api/v1', extra: {} },
   { name: 'Ollama', kind: 'openai', base_url: 'http://host.docker.internal:11434/v1', extra: {} },
   { name: 'ComfyUI', kind: 'comfyui', base_url: 'http://host.docker.internal:8188', extra: {} },

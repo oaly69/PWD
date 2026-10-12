@@ -44,9 +44,9 @@ export const PLATFORMS = [
     preset: '火山方舟',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     key_url: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
-    caps: ['对话', '图像'],
-    desc: '字节豆包大模型：豆包对话 / 深度思考 / 视觉理解，Seedream 生图（支持 /images/generations）。',
-    tips: ['需先在控制台「开通管理」中开通模型；模型名可填模型 ID，或填自建的推理接入点 ID（ep-xxxx）', 'Seedance 视频为方舟原生异步接口，暂不能直接接入'],
+    caps: ['对话', '图像', '视频'],
+    desc: '字节豆包大模型：豆包对话 / 深度思考 / 视觉理解，Seedream 生图，Seedance 文生视频与图生视频。',
+    tips: ['需先在控制台「开通管理」中开通模型；模型名可填模型 ID，或填自建的推理接入点 ID（ep-xxxx）', '预设已设置视频接口风格为「火山方舟 Seedance」；之前用旧预设添加的方舟服务也会自动识别，无需修改'],
   },
   {
     name: 'OpenRouter',
@@ -133,7 +133,7 @@ export const MODEL_KINDS = [
     label: '视频模型',
     steps: [
       '在服务的「视频模型」中填入模型 ID',
-      '在服务表单「高级设置 → 视频接口风格」中选择 OpenAI Sora 风格（/videos）或硅基流动（/video/submit），使用预设添加时已自动设置',
+      '在服务表单「高级设置 → 视频接口风格」中选择 OpenAI Sora 风格（/videos）、硅基流动（/video/submit）或火山方舟 Seedance，使用预设添加时已自动设置',
       '首帧参考图即图生视频：需要选择支持图生视频的模型（如 Wan I2V），文生视频模型会忽略参考图',
       '视频生成通常需要 1～10 分钟，提交后可离开页面；服务重启后会继续等待远端任务结果',
     ],
@@ -141,7 +141,8 @@ export const MODEL_KINDS = [
       { name: 'Sora 2', vendor: 'OpenAI', ids: ['sora-2', 'sora-2-pro'], where: ['OpenAI', '中转'], tags: ['物理真实', '同步音频', '镜头语言'], desc: '画面物理规律与镜头运动真实，可同时生成对白与音效；pro 版画质更高、更慢更贵。时长通常为 4 / 8 / 12 秒。' },
       { name: '万相 Wan', vendor: '阿里', ids: ['Wan-AI/Wan2.2-T2V-A14B', 'Wan-AI/Wan2.2-I2V-A14B'], where: ['硅基流动', 'ComfyUI'], tags: ['开源', '中文提示词', '图生视频', '运动幅度'], desc: '开源视频模型的代表，中文提示词理解好，动作幅度大；T2V 为文生视频，I2V 为图生视频（配合关键帧做短片很合适）。' },
       { name: '混元视频 / LTX-Video', vendor: '腾讯 / Lightricks', ids: ['（ComfyUI 工作流）'], where: ['ComfyUI'], tags: ['本地运行', '开源'], desc: '可在本地显卡运行的开源视频模型；LTX-Video 速度快、显存占用低，适合快速预览。' },
-      { name: '可灵 / 即梦 / Seedance', vendor: '快手 / 字节跳动', ids: ['（通过中转接入）'], where: ['中转'], tags: ['电影感', '人物动作'], desc: '国内商业视频模型，人物动作与运镜表现好。原生接口与 OpenAI 格式不兼容，可通过 New API 等网关转换后接入。' },
+      { name: 'Seedance', vendor: '字节跳动', ids: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428'], where: ['火山方舟'], tags: ['电影感', '多镜头叙事', '人物动作', '图生视频'], desc: '豆包视频模型，运镜与人物动作自然，支持一段提示词内多镜头切换；pro 版画质最高（最高 1080p），lite 版更快更便宜，t2v 为文生视频、i2v 为图生视频。尺寸会换算为分辨率（480p / 720p / 1080p）与画面比例，有首帧图时比例跟随图片；额外参数可写 {"camera_fixed": true}、{"watermark": false} 等。模型 ID 以方舟控制台为准。' },
+      { name: '可灵 / 即梦', vendor: '快手 / 字节跳动', ids: ['（通过中转接入）'], where: ['中转'], tags: ['电影感', '人物动作'], desc: '国内商业视频模型，人物动作与运镜表现好。原生接口与 OpenAI 格式不兼容，可通过 New API 等网关转换后接入。' },
     ],
   },
   {
