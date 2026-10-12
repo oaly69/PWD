@@ -382,6 +382,14 @@ async def speech(provider: Provider, model: str, text: str, params: dict[str, An
 # ---------------------------------------------------------------- 视频生成
 
 
+def video_api_of(provider: Provider) -> str:
+    """视频接口风格。火山方舟没有 /videos 接口，地址是方舟时按 ark 处理（兼容按旧预设保存为 openai 的服务）。"""
+    api = (provider.extra or {}).get("video_api") or "openai"
+    if api == "openai" and "volces.com" in (provider.base_url or ""):
+        return "ark"
+    return api
+
+
 async def generate_video(
     provider: Provider,
     model: str,
@@ -396,10 +404,13 @@ async def generate_video(
 
       - openai：OpenAI Sora 风格 POST /videos → GET /videos/{id} → GET /videos/{id}/content
       - siliconflow：POST /video/submit → POST /video/status
+      - ark：火山方舟 Seedance，POST /contents/generations/tasks → GET /contents/generations/tasks/{id}
     """
-    api = (provider.extra or {}).get("video_api") or "openai"
+    api = video_api_of(provider)
     deadline = time.monotonic() + timeout
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        if api == "ark":
+            return await _video_ark(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
         if api == "siliconflow":
             return await _video_siliconflow(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
         return await _video_openai(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id)
@@ -469,6 +480,98 @@ async def _video_siliconflow(client, provider, model, prompt, params, reference,
         raise ProviderError(f"服务未返回任务 ID：{resp.text[:300]}")
     await on_progress(0, request_id)
     return await _poll_siliconflow_video(client, provider, request_id, on_progress, deadline)
+
+
+# 火山方舟 Seedance 支持的画面比例
+ARK_RATIOS = {"16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1.0, "3:4": 3 / 4, "9:16": 9 / 16, "21:9": 21 / 9}
+
+
+def _ark_size(size: str | None) -> tuple[str | None, str | None]:
+    """把「宽x高」换算为方舟的 (resolution, ratio)，如 1280x720 → ("720p", "16:9")。"""
+    try:
+        w, h = (int(x) for x in str(size).lower().split("x"))
+    except (TypeError, ValueError):
+        return None, None
+    if w <= 0 or h <= 0:
+        return None, None
+    short = min(w, h)
+    resolution = "480p" if short <= 480 else "720p" if short <= 720 else "1080p"
+    ratio = min(ARK_RATIOS, key=lambda k: abs(ARK_RATIOS[k] - w / h))
+    return resolution, ratio
+
+
+def _ark_body(model: str, prompt: str, params: dict[str, Any], reference: tuple[bytes, str] | None, text_commands: bool) -> dict[str, Any]:
+    """构造方舟视频任务请求体。text_commands 为 True 时把参数写成提示词后缀（--resolution 720p 等，旧版模型的写法）。"""
+    resolution, ratio = _ark_size(params.get("size"))
+    opts: dict[str, Any] = {}
+    if resolution:
+        opts["resolution"] = resolution
+    if ratio:
+        # 图生视频时比例跟随首帧图片
+        opts["ratio"] = "adaptive" if reference else ratio
+    if params.get("seconds"):
+        opts["duration"] = int(params["seconds"])
+    if params.get("seed") not in (None, ""):
+        opts["seed"] = int(params["seed"])
+    extra = params.get("extra_body") if isinstance(params.get("extra_body"), dict) else {}
+    text = prompt
+    body: dict[str, Any] = {"model": model}
+    if text_commands:
+        merged = {**opts, **{k: v for k, v in extra.items() if k in ("resolution", "ratio", "duration", "seed", "camera_fixed", "watermark")}}
+        names = {"camera_fixed": "camerafixed"}
+        text += "".join(f" --{names.get(k, k)} {str(v).lower() if isinstance(v, bool) else v}" for k, v in merged.items())
+        extra = {k: v for k, v in extra.items() if k not in merged}
+    else:
+        body.update(opts)
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    if reference:
+        from .media import to_data_uri
+
+        content.append({"type": "image_url", "image_url": {"url": to_data_uri(*reference)}, "role": "first_frame"})
+    body["content"] = content
+    body.update(extra)
+    return body
+
+
+async def _video_ark(client, provider, model, prompt, params, reference, on_progress, deadline, resume_id=None):
+    if resume_id:
+        return await _poll_ark_video(client, provider, resume_id, on_progress, deadline)
+    url = f"{_base(provider)}/contents/generations/tasks"
+    resp = await client.post(url, headers=_headers(provider), json=_ark_body(model, prompt, params, reference, False))
+    if resp.status_code == 400:
+        # 部分旧版模型不认识请求体中的参数字段，改用提示词后缀的写法再试一次；仍失败时报告第一次的错误
+        retry = await client.post(url, headers=_headers(provider), json=_ark_body(model, prompt, params, reference, True))
+        if retry.status_code < 400:
+            resp = retry
+    _raise(resp, "提交视频任务")
+    task_id = resp.json().get("id")
+    if not task_id:
+        raise ProviderError(f"服务未返回任务 ID：{resp.text[:300]}")
+    await on_progress(0, task_id)
+    return await _poll_ark_video(client, provider, task_id, on_progress, deadline)
+
+
+async def _poll_ark_video(client, provider, task_id, on_progress, deadline):
+    started = time.monotonic()
+    while time.monotonic() < deadline:
+        await asyncio.sleep(5)
+        r = await client.get(f"{_base(provider)}/contents/generations/tasks/{task_id}", headers=_headers(provider))
+        _raise(r, "查询视频任务")
+        data = r.json()
+        status = data.get("status")
+        if status == "succeeded":
+            video_url = (data.get("content") or {}).get("video_url")
+            if not video_url:
+                raise ProviderError("服务未返回视频")
+            data_, mime = await _download(client, video_url)
+            return [(data_, mime if mime.startswith("video/") else "video/mp4")]
+        if status in ("failed", "cancelled", "expired"):
+            err = data.get("error") or {}
+            msg = err.get("message") if isinstance(err, dict) else err
+            raise ProviderError(f"视频生成失败：{msg or status}")
+        # 方舟不返回进度，按耗时估算一个平滑进度
+        await on_progress(min(95, int((time.monotonic() - started) / 3)), task_id)
+    raise ProviderError("等待视频生成超时")
 
 
 async def _poll_siliconflow_video(client, provider, request_id, on_progress, deadline):
