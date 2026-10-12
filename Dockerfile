@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # ---------- 前端构建 ----------
-FROM node:22-alpine AS web
+# 前端产物是与架构无关的静态文件，固定在构建机原生架构上构建，
+# 避免多架构构建时在 QEMU 模拟的 arm64 下执行 npm ci（很慢且可能卡死）
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
