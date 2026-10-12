@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref } from 'vue'
 import { NButton, NDropdown, NProgress, NSpin, NTag } from 'naive-ui'
 import { AudioLines, CircleAlert, Download, Ellipsis, Film, Image as ImageIcon, ImagePlus, Layers, Star } from 'lucide-vue-next'
 import { api, confirmDialog, toast } from '../api'
@@ -198,6 +198,19 @@ function add(task) {
 }
 
 defineExpose({ add })
+
+// 页面被缓存后重新进入：合并期间在其他地方创建的任务，并刷新进行中任务的状态
+let firstActivation = true
+onActivated(async () => {
+  if (firstActivation) { firstActivation = false; return }
+  try {
+    const latest = await api.get(`/api/tasks?kind=${props.kind}&limit=${PAGE}`, { silent: true })
+    const known = new Map(tasks.value.map((t) => [t.id, t]))
+    for (const t of latest) if (known.has(t.id)) Object.assign(known.get(t.id), t)
+    const fresh = latest.filter((t) => !known.has(t.id))
+    if (fresh.length) tasks.value.unshift(...fresh)
+  } catch { /* 忽略 */ }
+})
 
 onMounted(() => {
   load()

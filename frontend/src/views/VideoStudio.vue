@@ -75,7 +75,10 @@ import { api, toast } from '../api'
 import { VIDEO_SIZES } from '../constants'
 import { useStudio } from '../composables/studio'
 import { useLocalRef } from '../composables/localRef'
+import { useDraft } from '../composables/draft'
 import { MAX_BATCH, parseBatch } from '../utils/batch'
+
+defineOptions({ name: 'VideoStudio' })
 
 const form = reactive({ prompt: '', negative_prompt: '', size: '1280x720', seconds: 5, seed: null })
 const refs = ref([])
@@ -86,6 +89,7 @@ const batch = useLocalRef('pwd.batch.video', false)
 const batchText = ref('')
 const batchSplit = useLocalRef('pwd.batch.video.split', 'line')
 const batchPrompts = computed(() => parseBatch(batchText.value, batchSplit.value))
+useDraft('video', { form, refs, extraText, batchText })
 
 function applyParams(prompt, params, providerId, model) {
   batch.value = false

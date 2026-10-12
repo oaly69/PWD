@@ -53,9 +53,13 @@ import TaskFeed from '../components/TaskFeed.vue'
 import { toast } from '../api'
 import { VOICES } from '../constants'
 import { useStudio } from '../composables/studio'
+import { useDraft } from '../composables/draft'
+
+defineOptions({ name: 'SpeechStudio' })
 
 const form = reactive({ prompt: '', voice: 'alloy', speed: 1, format: 'mp3', instructions: '' })
 const feed = ref(null)
+useDraft('speech', { form })
 
 function applyParams(prompt, params, providerId, model) {
   form.prompt = prompt || ''

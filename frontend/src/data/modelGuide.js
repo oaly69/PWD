@@ -1,0 +1,191 @@
+// 模型服务页面的「接入指南」：常用平台的接入方式，以及各类模型的特点与擅长领域。
+// 模型更新很快，模型 ID 以「获取模型列表」的结果和各平台文档为准。
+
+/** 常用平台。preset 对应 constants.js 中 PROVIDER_PRESETS 的名称，可一键带入表单。 */
+export const PLATFORMS = [
+  {
+    name: 'OpenAI',
+    preset: 'OpenAI',
+    base_url: 'https://api.openai.com/v1',
+    key_url: 'https://platform.openai.com/api-keys',
+    caps: ['对话', '图像', '视频', '语音合成', '向量', '语音识别'],
+    desc: '能力最全的官方接口：GPT 系列对话、gpt-image-1 生图与编辑、Sora 视频、TTS / Whisper 语音。',
+    tips: ['国内服务器通常无法直连，需要海外服务器或通过 One API / New API 等中转', '账户需先充值，部分模型（如 gpt-image-1、Sora）需完成组织验证'],
+  },
+  {
+    name: 'DeepSeek',
+    preset: 'DeepSeek',
+    base_url: 'https://api.deepseek.com/v1',
+    key_url: 'https://platform.deepseek.com/api_keys',
+    caps: ['对话'],
+    desc: '国产高性价比大模型，中文、编程、数学推理表现突出，国内直连。',
+    tips: ['deepseek-chat 为通用对话，deepseek-reasoner 为深度思考模式（会显示推理过程）'],
+  },
+  {
+    name: '硅基流动 SiliconFlow',
+    preset: '硅基流动',
+    base_url: 'https://api.siliconflow.cn/v1',
+    key_url: 'https://cloud.siliconflow.cn/account/ak',
+    caps: ['对话', '图像', '视频', '语音合成', '向量', '语音识别'],
+    desc: '一站式开源模型平台，国内直连：Qwen、DeepSeek、GLM、Kimi 对话，Kolors / Qwen-Image / FLUX 生图，万相视频，CosyVoice 语音，bge 向量，部分模型免费。',
+    tips: ['预设已自动设置「高级设置」中的图生图方式（请求体 image 字段）与视频接口风格（/video/submit）', '语音合成的音色格式为「模型名:音色」，如 FunAudioLLM/CosyVoice2-0.5B:alex'],
+  },
+  {
+    name: '阿里云百炼',
+    preset: '阿里百炼',
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    key_url: 'https://bailian.console.aliyun.com/?apiKey=1',
+    caps: ['对话', '向量'],
+    desc: '通义千问官方平台：qwen-max / qwen-plus / qwen-turbo、Qwen3 系列、视觉理解 qwen-vl，以及 text-embedding-v3 向量模型。',
+    tips: ['兼容模式只覆盖对话与向量；通义万相生图 / 生视频使用阿里原生异步接口，可改用硅基流动上的同款开源模型（Qwen-Image、Wan）'],
+  },
+  {
+    name: '火山方舟（豆包）',
+    preset: '火山方舟',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    key_url: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+    caps: ['对话', '图像'],
+    desc: '字节豆包大模型：豆包对话 / 深度思考 / 视觉理解，Seedream 生图（支持 /images/generations）。',
+    tips: ['需先在控制台「开通管理」中开通模型；模型名可填模型 ID，或填自建的推理接入点 ID（ep-xxxx）', 'Seedance 视频为方舟原生异步接口，暂不能直接接入'],
+  },
+  {
+    name: 'OpenRouter',
+    preset: 'OpenRouter',
+    base_url: 'https://openrouter.ai/api/v1',
+    key_url: 'https://openrouter.ai/keys',
+    caps: ['对话'],
+    desc: '海外模型聚合平台：一个 Key 调用 Claude、Gemini、GPT、Llama、Grok 等数百个对话模型，按量计费。',
+    tips: ['模型 ID 带厂商前缀，如 anthropic/claude-sonnet-4、google/gemini-2.5-pro', '国内网络可能需要代理'],
+  },
+  {
+    name: 'Ollama（本地）',
+    preset: 'Ollama',
+    base_url: 'http://host.docker.internal:11434/v1',
+    key_url: 'https://ollama.com/library',
+    caps: ['对话', '向量'],
+    desc: '在自己电脑或服务器上运行开源模型，数据不出本机、无需付费：Qwen、DeepSeek-R1 蒸馏版、Llama、Gemma 等。',
+    tips: ['先执行 ollama pull qwen3 等下载模型；API Key 随便填', 'PWD 运行在 Docker 中时用 host.docker.internal 访问宿主机（Linux 需在 compose 中加 extra_hosts）'],
+  },
+  {
+    name: 'One API / New API（中转）',
+    preset: null,
+    base_url: 'http://你的地址/v1',
+    key_url: 'https://github.com/QuantumNous/new-api',
+    caps: ['对话', '图像', '视频', '语音合成', '向量', '语音识别'],
+    desc: '自建或第三方的模型网关，把多家厂商（含国内外）统一成 OpenAI 格式，适合集中管理 Key、额度与渠道。',
+    tips: ['接入方式与 OpenAI 相同：填网关地址（以 /v1 结尾）和网关令牌，再「获取模型列表」', '可灵、即梦等原生接口不兼容的视频模型，也可以通过网关转换后接入'],
+  },
+  {
+    name: 'ComfyUI（本地工作流）',
+    preset: 'ComfyUI',
+    base_url: 'http://host.docker.internal:8188',
+    key_url: 'https://github.com/comfyanonymous/ComfyUI',
+    caps: ['图像', '视频'],
+    desc: '在本地显卡上运行 Stable Diffusion、FLUX、Wan 等开源模型，可接入 LoRA、ControlNet 等任意自定义工作流。',
+    tips: ['在 ComfyUI 中「导出 API 格式」工作流，粘贴到服务表单中，用 {{prompt}}、{{seed}} 等占位符标记可变参数', '「模型」名称可随意填写，用于在 PWD 中区分不同工作流'],
+  },
+]
+
+/** 各类模型的接入步骤与代表模型。 */
+export const MODEL_KINDS = [
+  {
+    key: 'chat',
+    label: '对话模型',
+    steps: [
+      '添加模型服务，填写接口地址与 API Key，点击「获取模型列表 → 自动分类填入」',
+      '在「对话模型」中保留需要的模型；需要识图时选择带视觉能力的模型',
+      '在「系统设置 → 默认模型」中指定默认对话模型与「提示词优化模型」',
+      '想使用工具调用（生成图片、联网搜索、知识库检索），需选择支持 Function Calling 的模型',
+    ],
+    models: [
+      { name: 'GPT-5 / GPT-4.1 / GPT-4o', vendor: 'OpenAI', ids: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'], where: ['OpenAI', 'OpenRouter', '中转'], tags: ['综合能力', '编程', '识图', '工具调用'], desc: '综合能力标杆。GPT-5 推理与编程最强；GPT-4.1 擅长长上下文与严格遵循指令；GPT-4o 响应快、识图好；mini 版本便宜，适合日常对话。' },
+      { name: 'o3 / o4-mini', vendor: 'OpenAI', ids: ['o3', 'o4-mini'], where: ['OpenAI', 'OpenRouter'], tags: ['深度推理', '数学', '编程'], desc: '推理模型，回答前会长时间思考，适合数学、复杂分析与疑难代码，速度较慢、成本较高。' },
+      { name: 'Claude', vendor: 'Anthropic', ids: ['anthropic/claude-sonnet-4', 'anthropic/claude-opus-4'], where: ['OpenRouter', '中转'], tags: ['写作', '编程', '长文档', '智能体'], desc: '文字自然细腻，长文写作、代码与复杂指令执行能力突出，200K 长上下文适合读整本文档。通过 OpenRouter 或中转接入。' },
+      { name: 'Gemini 2.5', vendor: 'Google', ids: ['google/gemini-2.5-pro', 'google/gemini-2.5-flash'], where: ['OpenRouter', '中转'], tags: ['超长上下文', '多模态', '性价比'], desc: '百万级上下文，可一次读入大量资料；Pro 推理强，Flash 速度快、价格低，识图能力好。' },
+      { name: 'DeepSeek-V3 / R1', vendor: '深度求索', ids: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1'], where: ['DeepSeek', '硅基流动', '火山方舟', '阿里百炼'], tags: ['中文', '性价比', '编程', '推理'], desc: 'V3（deepseek-chat）通用对话便宜好用；R1（deepseek-reasoner）为推理模式，会展示思考过程，适合数学与逻辑题。官方接口与硅基流动的模型 ID 写法不同。' },
+      { name: '通义千问 Qwen', vendor: '阿里', ids: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'Qwen/Qwen3-235B-A22B'], where: ['阿里百炼', '硅基流动', 'Ollama'], tags: ['中文', '工具调用', '长文本', '可本地部署'], desc: '中文理解与写作优秀，工具调用稳定；Qwen3 开源版本可在硅基流动调用或用 Ollama 本地运行。qwen-vl 系列支持识图。' },
+      { name: '豆包', vendor: '字节跳动', ids: ['doubao-seed-1.6', 'doubao-1.5-pro-32k'], where: ['火山方舟'], tags: ['中文', '速度快', '低价', '识图'], desc: '响应快、价格低，日常中文对话和客服类场景表现好；Seed 系列支持深度思考与图片理解。模型 ID 以方舟控制台为准。' },
+      { name: 'GLM / Kimi', vendor: '智谱 / 月之暗面', ids: ['zai-org/GLM-4.5', 'moonshotai/Kimi-K2-Instruct'], where: ['硅基流动', 'OpenRouter'], tags: ['智能体', '编程', '长上下文'], desc: 'GLM-4.5 与 Kimi K2 都擅长工具调用和编程类任务，适合搭配 MCP 工具使用。' },
+      { name: '本地开源模型', vendor: 'Ollama', ids: ['qwen3', 'deepseek-r1', 'llama3.1', 'gemma3'], where: ['Ollama'], tags: ['隐私', '离线', '免费'], desc: '数据不出本机，适合处理敏感资料。效果取决于显卡 / 内存能跑多大的模型，7B～14B 适合日常问答。' },
+    ],
+  },
+  {
+    key: 'image',
+    label: '图像模型',
+    steps: [
+      '在服务的「图像模型」中填入模型 ID（获取模型列表通常能自动识别）',
+      '参考图（图生图）的传递方式在服务表单「高级设置 → 图生图方式」中选择：OpenAI 等用 /images/edits 接口，硅基流动等用请求体 image 字段',
+      '局部重绘 / 扩图需要模型支持图像编辑（如 gpt-image-1、Qwen-Image-Edit、Kolors），高清放大可选择「本地放大」无需模型',
+      '不同模型支持的尺寸不同，生成失败时先换成 1024x1024 试试；额外参数（如 quality、background）可写在「额外请求参数」中',
+    ],
+    models: [
+      { name: 'gpt-image-1', vendor: 'OpenAI', ids: ['gpt-image-1'], where: ['OpenAI', '中转'], tags: ['指令理解', '文字渲染', '图像编辑', '透明背景'], desc: '理解复杂描述的能力最强，能准确画出文字，支持多张参考图编辑和局部重绘；额外参数 {"background": "transparent"} 可输出透明背景 PNG。尺寸：1024x1024、1536x1024、1024x1536。' },
+      { name: 'DALL·E 3', vendor: 'OpenAI', ids: ['dall-e-3'], where: ['OpenAI', '中转'], tags: ['创意构图', '插画'], desc: '想象力丰富、构图有创意，适合插画与概念图；每次只出 1 张（PWD 会自动多次请求补齐数量），不支持参考图。' },
+      { name: 'FLUX.1', vendor: 'Black Forest Labs', ids: ['black-forest-labs/FLUX.1-schnell', 'black-forest-labs/FLUX.1-dev'], where: ['硅基流动', 'ComfyUI', '中转'], tags: ['写实摄影', '细节', '风格多样'], desc: '开源生图的代表，写实人像、产品与场景细节好；schnell 版速度快、成本低，dev 版质量更高。英文提示词效果更好。' },
+      { name: 'Qwen-Image', vendor: '阿里', ids: ['Qwen/Qwen-Image', 'Qwen/Qwen-Image-Edit'], where: ['硅基流动', 'ComfyUI'], tags: ['中文文字', '海报', '指令编辑'], desc: '中文文字渲染能力突出，适合海报、封面、带标题的设计图；Edit 版可用一句话修改图片（换背景、改文字、加元素）。' },
+      { name: 'Kolors 可图', vendor: '快手', ids: ['Kwai-Kolors/Kolors'], where: ['硅基流动'], tags: ['中文提示词', '人像', '图生图'], desc: '直接理解中文描述，人像与东方审美表现好，支持参考图生成。' },
+      { name: 'Seedream', vendor: '字节跳动', ids: ['doubao-seedream-3-0-t2i-250415'], where: ['火山方舟'], tags: ['中文', '海报', '美学'], desc: '豆包生图模型，画面美感好，中文文字与排版能力强，适合营销海报与电商图。模型 ID 以方舟控制台为准。' },
+      { name: 'Stable Diffusion / SDXL', vendor: '开源社区', ids: ['（ComfyUI 工作流）'], where: ['ComfyUI'], tags: ['本地运行', 'LoRA', 'ControlNet', '可控'], desc: '本地显卡运行，可加载海量社区模型与 LoRA，用 ControlNet 精确控制姿势和构图，适合有固定风格需求的批量创作。' },
+    ],
+  },
+  {
+    key: 'video',
+    label: '视频模型',
+    steps: [
+      '在服务的「视频模型」中填入模型 ID',
+      '在服务表单「高级设置 → 视频接口风格」中选择 OpenAI Sora 风格（/videos）或硅基流动（/video/submit），使用预设添加时已自动设置',
+      '首帧参考图即图生视频：需要选择支持图生视频的模型（如 Wan I2V），文生视频模型会忽略参考图',
+      '视频生成通常需要 1～10 分钟，提交后可离开页面；服务重启后会继续等待远端任务结果',
+    ],
+    models: [
+      { name: 'Sora 2', vendor: 'OpenAI', ids: ['sora-2', 'sora-2-pro'], where: ['OpenAI', '中转'], tags: ['物理真实', '同步音频', '镜头语言'], desc: '画面物理规律与镜头运动真实，可同时生成对白与音效；pro 版画质更高、更慢更贵。时长通常为 4 / 8 / 12 秒。' },
+      { name: '万相 Wan', vendor: '阿里', ids: ['Wan-AI/Wan2.2-T2V-A14B', 'Wan-AI/Wan2.2-I2V-A14B'], where: ['硅基流动', 'ComfyUI'], tags: ['开源', '中文提示词', '图生视频', '运动幅度'], desc: '开源视频模型的代表，中文提示词理解好，动作幅度大；T2V 为文生视频，I2V 为图生视频（配合关键帧做短片很合适）。' },
+      { name: '混元视频 / LTX-Video', vendor: '腾讯 / Lightricks', ids: ['（ComfyUI 工作流）'], where: ['ComfyUI'], tags: ['本地运行', '开源'], desc: '可在本地显卡运行的开源视频模型；LTX-Video 速度快、显存占用低，适合快速预览。' },
+      { name: '可灵 / 即梦 / Seedance', vendor: '快手 / 字节跳动', ids: ['（通过中转接入）'], where: ['中转'], tags: ['电影感', '人物动作'], desc: '国内商业视频模型，人物动作与运镜表现好。原生接口与 OpenAI 格式不兼容，可通过 New API 等网关转换后接入。' },
+    ],
+  },
+  {
+    key: 'tts',
+    label: '语音合成',
+    steps: [
+      '在服务的「语音合成模型」中填入模型 ID（接口为 OpenAI 兼容的 /audio/speech）',
+      '在语音合成页选择音色：OpenAI 用 alloy、nova 等名称，硅基流动用「模型名:音色」格式',
+      '「语气指令」仅部分模型支持（如 gpt-4o-mini-tts），可写「用温柔、舒缓的语气」',
+    ],
+    models: [
+      { name: 'gpt-4o-mini-tts', vendor: 'OpenAI', ids: ['gpt-4o-mini-tts'], where: ['OpenAI', '中转'], tags: ['语气可控', '多语言'], desc: '支持用自然语言指定语气、情绪和语速，适合有声书、旁白；音色 alloy、nova、shimmer、coral 等。' },
+      { name: 'TTS-1 / TTS-1-HD', vendor: 'OpenAI', ids: ['tts-1', 'tts-1-hd'], where: ['OpenAI', '中转'], tags: ['稳定', '低延迟'], desc: '经典语音合成，tts-1 速度快，hd 版音质更好。' },
+      { name: 'CosyVoice 2', vendor: '阿里通义实验室', ids: ['FunAudioLLM/CosyVoice2-0.5B'], where: ['硅基流动'], tags: ['中文自然', '方言', '情感'], desc: '中文发音自然，支持粤语等方言与情感表达，适合中文配音与短视频旁白。音色如 FunAudioLLM/CosyVoice2-0.5B:alex、:anna。' },
+      { name: 'Fish Speech', vendor: 'Fish Audio', ids: ['fishaudio/fish-speech-1.5'], where: ['硅基流动'], tags: ['多语言', '中英混读'], desc: '中英日等多语言表现均衡，中英混读自然。' },
+    ],
+  },
+  {
+    key: 'embedding',
+    label: '向量模型',
+    steps: [
+      '在服务的「向量模型」中填入模型 ID，用于知识库语义检索',
+      '新建知识库时选择向量模型；不选择则使用关键词检索，不需要任何模型',
+      '知识库一旦上传了文档就不能更换向量模型（向量不通用），请先确定再上传',
+    ],
+    models: [
+      { name: 'BGE-M3', vendor: '智源 BAAI', ids: ['BAAI/bge-m3'], where: ['硅基流动', 'Ollama'], tags: ['中文', '多语言', '长文本', '低价'], desc: '中文与多语言检索效果好，支持 8K 长文本，价格低（硅基流动上常为免费），推荐作为默认选择。' },
+      { name: 'Qwen3-Embedding', vendor: '阿里', ids: ['Qwen/Qwen3-Embedding-8B', 'Qwen/Qwen3-Embedding-0.6B'], where: ['硅基流动'], tags: ['检索精度高', '多语言'], desc: '较新的开源向量模型，检索精度高；0.6B 版速度快、成本低。' },
+      { name: 'text-embedding-3', vendor: 'OpenAI', ids: ['text-embedding-3-small', 'text-embedding-3-large'], where: ['OpenAI', '中转'], tags: ['英文', '稳定'], desc: 'small 版便宜够用，large 版精度更高；英文资料为主时推荐。' },
+      { name: 'text-embedding-v3', vendor: '阿里', ids: ['text-embedding-v3'], where: ['阿里百炼'], tags: ['中文'], desc: '通义官方向量模型，中文效果好，适合已在用百炼的用户。' },
+      { name: 'nomic-embed-text', vendor: 'Nomic', ids: ['nomic-embed-text'], where: ['Ollama'], tags: ['本地', '免费'], desc: '体积小、可本地运行，适合离线知识库（中文资料建议用 bge-m3）。' },
+    ],
+  },
+  {
+    key: 'stt',
+    label: '语音识别',
+    steps: [
+      '在服务的「语音识别模型」中填入模型 ID（接口为 /audio/transcriptions）',
+      '在「系统设置 → 默认模型」中指定语音识别模型，对话输入框的麦克风按钮即可使用',
+    ],
+    models: [
+      { name: 'SenseVoice', vendor: '阿里通义实验室', ids: ['FunAudioLLM/SenseVoiceSmall'], where: ['硅基流动'], tags: ['中文', '粤语', '速度快', '低价'], desc: '中文、粤语识别准确，速度极快，硅基流动上常为免费，推荐国内用户使用。' },
+      { name: 'Whisper', vendor: 'OpenAI', ids: ['whisper-1'], where: ['OpenAI', '中转'], tags: ['多语言', '稳定'], desc: '支持近百种语言，鲁棒性好。' },
+      { name: 'gpt-4o-transcribe', vendor: 'OpenAI', ids: ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe'], where: ['OpenAI', '中转'], tags: ['准确率高', '嘈杂环境'], desc: '比 Whisper 更准确，口音与嘈杂环境下表现更好；mini 版更便宜。' },
+    ],
+  },
+]

@@ -106,6 +106,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { api, confirmDialog, toast } from '../api'
 import { store } from '../store'
 import { copyText } from '../utils/format'
+import { useDraft } from '../composables/draft'
 
 const TABS = {
   chat: { label: '对话角色', unit: '角色', icon: '🤖' },
@@ -125,6 +126,7 @@ const group = ref('全部分组')
 const limit = ref(60)
 const showForm = ref(false)
 const form = ref({})
+useDraft('library', { tab, q, owner, group }, { session: true })
 
 const admin = computed(() => !!store.user?.is_admin)
 const builtinCount = computed(() => prompts.value.filter((p) => p.builtin).length)

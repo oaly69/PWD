@@ -105,6 +105,7 @@ import EmptyState from '../components/EmptyState.vue'
 import MediaViewer from '../components/MediaViewer.vue'
 import { api, confirmDialog, toast, ui, uploadFile } from '../api'
 import { downloadUrl } from '../utils/format'
+import { useDraft } from '../composables/draft'
 
 const SOURCES = [
   { label: '全部来源', value: '' },
@@ -137,6 +138,8 @@ let searchTimer = null
 
 const boards = ref([])
 const board = ref(null) // null 全部 / 0 未归类 / 作品集 ID
+// 筛选条件在当前标签页内保留，切换菜单回来不重置
+useDraft('gallery', { kind, source, model, favorite, q, board }, { session: true })
 const BOARD_MENU = [{ label: '重命名', key: 'rename' }, { label: '删除作品集', key: 'delete' }]
 const hasFilter = computed(() => kind.value || source.value || model.value || favorite.value || q.value || board.value !== null)
 const moveOptions = computed(() => [
@@ -148,6 +151,8 @@ const moveOptions = computed(() => [
 
 async function loadBoards() {
   boards.value = await api.get('/api/boards', { silent: true }).catch(() => [])
+  // 记住的作品集已被删除时回到全部
+  if (board.value && !boards.value.some((b) => b.id === board.value)) setBoard(null)
 }
 
 function setBoard(id) {

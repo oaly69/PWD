@@ -93,6 +93,7 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { useLocalRef } from '../composables/localRef'
+import { useDraft } from '../composables/draft'
 import { NButton, NCollapse, NCollapseItem, NInput, NInputGroup, NInputNumber, NRadioButton, NRadioGroup, NSlider } from 'naive-ui'
 import { Columns3, Dices, Image as ImageIcon, Layers, Sparkles } from 'lucide-vue-next'
 import AspectPicker from '../components/AspectPicker.vue'
@@ -109,6 +110,8 @@ import { splitModelKey } from '../store'
 import { useStudio } from '../composables/studio'
 import { MAX_BATCH, parseBatch } from '../utils/batch'
 
+defineOptions({ name: 'ImageStudio' })
+
 const form = reactive({ prompt: '', negative_prompt: '', size: '1024x1024', n: 1, seed: null, steps: 25 })
 const style = ref(null)
 const refs = ref([])
@@ -123,6 +126,7 @@ const batch = useLocalRef('pwd.batch.image', false)
 const batchText = ref('')
 const batchSplit = useLocalRef('pwd.batch.image.split', 'line')
 const batchPrompts = computed(() => parseBatch(batchText.value, batchSplit.value))
+useDraft('image', { form, style, refs, extraText, compare, compareKeys, batchText })
 
 function applyParams(prompt, params, providerId, model) {
   batch.value = false

@@ -53,7 +53,7 @@
       </header>
       <main class="content" :class="{ full: route.meta.full }">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['Chat']">
+          <keep-alive :include="KEEP_ALIVE">
             <component :is="Component" :key="route.meta.full ? route.path.split('/')[1] : route.fullPath" />
           </keep-alive>
         </router-view>
@@ -74,6 +74,9 @@ import { prefetchViews } from '../router'
 import { api } from '../api'
 import { loadProviders, store } from '../store'
 import { setThemeMode, themeMode } from '../composables/theme'
+
+// 切换菜单后保留这些页面的状态（输入内容、生成结果）
+const KEEP_ALIVE = ['Chat', 'ImageStudio', 'VideoStudio', 'SpeechStudio']
 
 const route = useRoute()
 const router = useRouter()
