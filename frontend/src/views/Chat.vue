@@ -313,7 +313,7 @@
 </template>
 
 <script setup>
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NCheckbox, NCheckboxGroup, NDrawer, NDrawerContent, NDropdown, NInput, NInputNumber, NModal, NPopover, NSlider, NSpin, NTag, NTooltip } from 'naive-ui'
 import {
@@ -328,6 +328,7 @@ import { api, confirmDialog, streamPost, toast, ui, uploadFile } from '../api'
 import { loadProviders, loadSettings, providerName, splitModelKey, store } from '../store'
 import { copyText, downloadUrl, groupByDate } from '../utils/format'
 import { handleCodeCopy, renderMarkdown, splitThink } from '../utils/markdown'
+import { useDraft } from '../composables/draft'
 
 defineOptions({ name: 'Chat' })
 
@@ -368,6 +369,15 @@ const toolsLoading = ref(false)
 const openTools = ref(new Set())
 const settings = ref({})
 const recording = ref(false)
+// 每个对话各自的未发送草稿，切换对话、离开页面或刷新后恢复
+const inputDrafts = reactive({})
+useDraft('chat', { inputDrafts })
+watch(input, (v) => {
+  const id = current.value?.id
+  if (!id) return
+  if (v.trim()) inputDrafts[id] = v
+  else delete inputDrafts[id]
+})
 const transcribing = ref(false)
 let recorder = null
 const DOC_ACCEPT = '.pdf,.docx,.pptx,.xlsx,.md,.markdown,.txt,.csv,.json,.html,.htm,.epub,.srt,.vtt,.log,.py,.js,.ts,.java,.go,.sql,.yaml,.yml,.xml'
@@ -520,6 +530,7 @@ async function open(id) {
   editing.value = null
   if (String(route.params.id) !== String(id)) router.replace(`/chat/${id}`)
   current.value = await api.get(`/api/conversations/${id}`)
+  input.value = inputDrafts[current.value.id] || ''
   scrollBottom(true)
 }
 

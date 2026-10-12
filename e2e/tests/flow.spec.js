@@ -147,6 +147,25 @@ test('图像：批量生成', async () => {
   await page.click('.mode-switch button:has-text("单条")')
 })
 
+test('切换页面与刷新后保留输入', async () => {
+  await page.goto('/image')
+  const prompt = page.locator('.prompt-input textarea')
+  await prompt.fill('草稿：雨夜的霓虹街道')
+  await page.click('.n-menu a[href="/gallery"]')
+  await expect(page.locator('.gallery')).toBeVisible()
+  await page.click('.n-menu a[href="/image"]')
+  await expect(prompt).toHaveValue('草稿：雨夜的霓虹街道')
+  await page.reload()
+  await expect(page.locator('.prompt-input textarea')).toHaveValue('草稿：雨夜的霓虹街道')
+  // 对话输入框按对话分别保存草稿
+  await page.click('.n-menu a[href="/chat"]')
+  await page.fill('.composer textarea', '还没发出去的问题')
+  await page.click('.n-menu a[href="/knowledge"]')
+  await page.click('.n-menu a[href="/chat"]')
+  await expect(page.locator('.composer textarea')).toHaveValue('还没发出去的问题')
+  await page.fill('.composer textarea', '')
+})
+
 test('作品集', async () => {
   await page.goto('/gallery')
   await page.click('button:has-text("多选")')

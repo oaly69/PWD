@@ -70,8 +70,10 @@ export function useStudio(kind, { onAsset, onRef, onPrompt } = {}) {
     await handleQuery()
   })
 
+  // 页面被 keep-alive 缓存时，其他页面的路由变化也会触发；只处理指向本页面的参数
+  const ownPath = route.path
   watch(() => route.query, (q) => {
-    if (q.ref || q.asset || q.prompt) handleQuery()
+    if (route.path === ownPath && (q.ref || q.asset || q.prompt)) handleQuery()
   })
 
   return { modelKey, submitting, submit, submitBatch, isComfy, currentProvider }

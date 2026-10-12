@@ -282,6 +282,7 @@ defineExpose({
     if (form.kind === 'comfyui' && workflows.value.some((w) => wfError(w))) return '存在格式错误的工作流 JSON'
     return ''
   },
+  applyPreset,
 })
 </script>
 

@@ -232,7 +232,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
   NButton, NCheckbox, NDrawer, NDrawerContent, NDropdown, NForm, NFormItem, NInput, NInputNumber, NModal, NProgress,
   NRadioButton, NRadioGroup, NSelect, NSpin, NTag,
@@ -303,9 +303,26 @@ function stepDone(key) {
   return !!x.output
 }
 
+const TEXT_FIELDS = ['name', 'synopsis', 'style', 'script']
+let savedText = {}
+
 function setProject(data) {
-  p.value = data
+  // 保存返回时保留正在编辑、尚未保存的文字，避免被服务端旧值覆盖
+  const typing = p.value && p.value.id === data.id
+    ? Object.fromEntries(TEXT_FIELDS.filter((k) => p.value[k] !== savedText[k]).map((k) => [k, p.value[k]]))
+    : {}
+  savedText = Object.fromEntries(TEXT_FIELDS.map((k) => [k, data[k]]))
+  p.value = { ...data, ...typing }
 }
+
+/** 离开页面前保存还没失焦保存的文字（剧本、梗概等）。 */
+async function flushText() {
+  if (!p.value) return
+  const diff = Object.fromEntries(TEXT_FIELDS.filter((k) => p.value[k] !== savedText[k]).map((k) => [k, p.value[k]]))
+  if (Object.keys(diff).length) await save(diff).catch(() => {})
+}
+onBeforeRouteLeave(flushText)
+onBeforeRouteUpdate(flushText)
 
 async function load() {
   setProject(await api.get(`/api/projects/${route.params.id}`))

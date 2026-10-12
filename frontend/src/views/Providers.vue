@@ -43,6 +43,8 @@
       <n-button type="primary" @click="openForm()">添加服务</n-button>
     </EmptyState>
 
+    <ModelGuide @use-preset="usePreset" />
+
     <n-modal v-model:show="showForm" preset="card" :title="form?.id ? '编辑模型服务' : '添加模型服务'" style="width: min(780px, 96vw)" :segmented="{ content: true, footer: 'soft' }" :mask-closable="false">
       <ProviderForm v-if="form" :key="formKey" ref="pform" :form="form" :editing="!!form.id" :tester="tester" />
       <template #footer>
@@ -58,12 +60,14 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref } from 'vue'
 import { NButton, NCheckbox, NModal, NSwitch, NTag } from 'naive-ui'
 import { AudioLines, Film, Image as ImageIcon, MessageSquare, Pencil, Plug, Plus, Trash2, Zap } from 'lucide-vue-next'
 import EmptyState from '../components/EmptyState.vue'
+import ModelGuide from '../components/ModelGuide.vue'
 import ProviderForm from '../components/ProviderForm.vue'
 import { api, confirmDialog, toast } from '../api'
+import { PROVIDER_PRESETS } from '../constants'
 import { loadProviders, store } from '../store'
 
 const CAPS = [
@@ -90,6 +94,14 @@ function openForm(p) {
     ? { ...JSON.parse(JSON.stringify(p)), api_key: '' }
     : { name: '', kind: 'openai', base_url: '', api_key: '', enabled: true, chat_models: [], image_models: [], video_models: [], tts_models: [], embedding_models: [], stt_models: [], extra: {} })
   showForm.value = true
+}
+
+/** 从接入指南用平台预设打开「添加服务」表单。 */
+async function usePreset(name) {
+  const p = PROVIDER_PRESETS.find((x) => x.name === name)
+  openForm()
+  await nextTick()
+  if (p) pform.value?.applyPreset(p)
 }
 
 const tester = (payload) => api.post('/api/providers/test-draft', payload)

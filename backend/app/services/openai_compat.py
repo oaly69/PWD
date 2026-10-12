@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 import httpx
 
 from ..models import Provider
+
+log = logging.getLogger(__name__)
 
 TIMEOUT = httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=15.0)
 
@@ -266,11 +269,15 @@ async def generate_images(
       - edits：调用 /images/edits（multipart，OpenAI gpt-image-1 等）
       - field：在 /images/generations 请求体中附带 image 字段（硅基流动 Kolors / Qwen-Image-Edit 等）
     """
-    body = _image_body(model, prompt, params)
     extra_body = params.get("extra_body")
     mode = (provider.extra or {}).get("image_edit_mode") or "edits"
+    want = max(1, int(params.get("n") or 1))
 
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+    async def once(client: httpx.AsyncClient, n: int, seed_offset: int = 0) -> list[tuple[bytes, str]]:
+        p = dict(params, n=n)
+        if seed_offset and p.get("seed") not in (None, ""):
+            p["seed"] = int(p["seed"]) + seed_offset  # 固定种子时补齐的图依次 +1，避免重复
+        body = _image_body(model, prompt, p)
         if references and mode == "edits":
             form = {k: str(v) for k, v in body.items()}
             if isinstance(extra_body, dict):
@@ -291,6 +298,19 @@ async def generate_images(
             resp = await client.post(f"{_base(provider)}/images/generations", headers=_headers(provider), json=body)
             _raise(resp, "图像生成")
         return await _collect_images(client, resp.json())
+
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        images = await once(client, want)
+        # 不少服务忽略 n（如 DALL·E 3、硅基流动、通义等每次只出 1 张），不足时并发补齐
+        missing = want - len(images)
+        if images and missing > 0:
+            results = await asyncio.gather(*(once(client, 1, i + 1) for i in range(missing)), return_exceptions=True)
+            for r in results:
+                if isinstance(r, BaseException):
+                    log.warning("补齐图片失败：%s", r)
+                else:
+                    images.extend(r)
+        return images[:want]
 
 
 async def edit_image(

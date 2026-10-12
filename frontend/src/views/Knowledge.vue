@@ -90,6 +90,7 @@ import ModelSelect from '../components/ModelSelect.vue'
 import { api, confirmDialog, toast } from '../api'
 import { loadProviders, splitModelKey } from '../store'
 import { formatBytes, relativeTime } from '../utils/format'
+import { useDraft } from '../composables/draft'
 
 const ACCEPT = '.pdf,.docx,.pptx,.xlsx,.md,.markdown,.txt,.csv,.json,.html,.htm,.epub,.srt,.vtt,.log,.py,.js,.ts,.java,.go,.sql,.yaml,.yml,.xml'
 const STATUS = { pending: ['排队中', 'default'], processing: ['处理中', 'info'], ready: ['已就绪', 'success'], failed: ['失败', 'error'] }
@@ -107,6 +108,8 @@ const hits = ref([])
 const searching = ref(false)
 const searched = ref(false)
 let timer = null
+const lastKb = ref(null)
+useDraft('knowledge', { lastKb, query }, { session: true })
 
 const docCols = [
   { title: '文档', key: 'filename', ellipsis: { tooltip: true } },
@@ -127,11 +130,12 @@ async function loadKbs() {
   kbs.value = await api.get('/api/kb')
   loaded.value = true
   if (current.value) current.value = kbs.value.find((k) => k.id === current.value.id) || null
-  if (!current.value && kbs.value.length) select(kbs.value[0])
+  if (!current.value && kbs.value.length) select(kbs.value.find((k) => k.id === lastKb.value) || kbs.value[0])
 }
 
 async function select(k) {
   current.value = k
+  lastKb.value = k.id
   hits.value = []
   searched.value = false
   await loadDocs()
