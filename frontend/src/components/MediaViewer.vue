@@ -1,19 +1,42 @@
 <template>
   <Teleport to="body">
     <transition name="fade">
-      <div v-if="current" class="viewer" @click.self="close">
+      <div v-if="current" ref="viewerEl" class="viewer" :class="{ 'no-info': !showInfo }" @click.self="close">
         <div class="stage" @click.self="close">
-          <button v-if="index > 0" class="nav prev" @click="go(-1)"><ChevronLeft :size="26" /></button>
-          <img v-if="current.kind === 'image'" :key="current.id" :src="current.url" class="media" @dblclick="zoom = !zoom" :class="{ zoom }" />
+          <button v-if="index > 0" class="nav prev" title="上一张（←）" @click="go(-1)"><ChevronLeft :size="26" /></button>
+          <ImageStage v-if="current.kind === 'image'" ref="stage" :key="current.id" :src="current.url" @close="close" @nav="go" />
           <video v-else-if="current.kind === 'video'" :key="current.id" :src="current.url" class="media" controls autoplay loop />
           <div v-else class="audio-box">
             <Music :size="48" :stroke-width="1.5" />
             <audio :key="current.id" :src="current.url" controls autoplay />
           </div>
-          <button v-if="index < items.length - 1" class="nav next" @click="go(1)"><ChevronRight :size="26" /></button>
+          <button v-if="index < items.length - 1" class="nav next" title="下一张（→）" @click="go(1)"><ChevronRight :size="26" /></button>
+
+          <div class="viewer-bar" @dblclick.stop>
+            <template v-if="current.kind === 'image'">
+              <button title="缩小（-）" @click="stage?.zoomOut()"><ZoomOut :size="18" /></button>
+              <button class="pct" title="点击切换适应窗口 / 原始尺寸（0 / 1）" @click="stage?.toggleFit()">{{ stage?.percent ?? 100 }}%</button>
+              <button title="放大（+）" @click="stage?.zoomIn()"><ZoomIn :size="18" /></button>
+              <i class="sep" />
+              <button title="适应窗口（0）" @click="stage?.fit()"><Scan :size="18" /></button>
+              <button title="向左旋转（Shift+R）" @click="stage?.rotate(-90)"><RotateCcw :size="18" /></button>
+              <button title="向右旋转（R）" @click="stage?.rotate(90)"><RotateCw :size="18" /></button>
+              <button class="m-hide" title="水平翻转（H）" @click="stage?.flip()"><FlipHorizontal2 :size="18" /></button>
+              <button class="m-hide" title="还原" @click="stage?.reset()"><RefreshCcw :size="18" /></button>
+              <i class="sep" />
+            </template>
+            <button title="下载" @click="downloadUrl(current.url, `pwd-${current.id}`)"><Download :size="18" /></button>
+            <button v-if="canFullscreen" class="m-hide" :title="fullscreen ? '退出全屏' : '全屏'" @click="toggleFullscreen">
+              <component :is="fullscreen ? Minimize : Maximize" :size="18" />
+            </button>
+            <button :title="showInfo ? '隐藏信息面板（I）' : '显示信息面板（I）'" @click="showInfo = !showInfo">
+              <component :is="showInfo ? PanelRightClose : PanelRightOpen" :size="18" />
+            </button>
+            <button class="close-btn" title="关闭（Esc）" @click="close"><X :size="18" /></button>
+          </div>
         </div>
 
-        <aside class="info">
+        <aside v-show="showInfo" class="info">
           <div class="info-head">
             <n-tag size="small" :bordered="false" :type="current.source === 'upload' ? 'default' : 'primary'">
               {{ current.source === 'upload' ? '上传素材' : '生成作品' }}
@@ -71,13 +94,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NDropdown, NSelect, NTag } from 'naive-ui'
 import ImageEditor from './ImageEditor.vue'
-import { ChevronLeft, ChevronRight, Copy, Download, Film, ImagePlus, Music, Repeat, Star, Trash2, Wand2, X } from 'lucide-vue-next'
+import ImageStage from './ImageStage.vue'
+import {
+  ChevronLeft, ChevronRight, Copy, Download, Film, FlipHorizontal2, ImagePlus, Maximize, Minimize, Music, PanelRightClose, PanelRightOpen,
+  RefreshCcw, Repeat, RotateCcw, RotateCw, Scan, Star, Trash2, Wand2, X, ZoomIn, ZoomOut,
+} from 'lucide-vue-next'
 import { api, confirmDialog, toast } from '../api'
 import { copyText, downloadUrl, formatBytes, formatTime } from '../utils/format'
+import { useLocalRef } from '../composables/localRef'
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -86,7 +114,11 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:index', 'deleted', 'changed'])
 const router = useRouter()
-const zoom = ref(false)
+const viewerEl = ref(null)
+const stage = ref(null)
+const showInfo = useLocalRef('pwd.viewer.info', true)
+const fullscreen = ref(false)
+const canFullscreen = typeof document !== 'undefined' && !!document.documentElement.requestFullscreen
 const editing = ref(null)
 const editOp = ref('inpaint')
 const EDIT_OPS = [
@@ -100,7 +132,16 @@ const current = computed(() => (props.index >= 0 ? props.items[props.index] : nu
 const studio = computed(() => ({ image: 'image', video: 'video', audio: 'speech' })[current.value?.kind])
 
 function close() {
+  if (document.fullscreenElement) document.exitFullscreen?.()
   emit('update:index', -1)
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen()
+  else viewerEl.value?.requestFullscreen?.().catch(() => {})
+}
+function onFullscreenChange() {
+  fullscreen.value = !!document.fullscreenElement
 }
 function go(d) {
   const i = props.index + d
@@ -144,25 +185,48 @@ async function remove() {
 }
 
 function onKey(e) {
-  if (!current.value || editing.value || ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
-  if (e.key === 'Escape') close()
-  else if (e.key === 'ArrowLeft') go(-1)
-  else if (e.key === 'ArrowRight') go(1)
-  else if (e.key.toLowerCase() === 'f') toggleFav()
+  if (!current.value || editing.value || ['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return
+  const s = stage.value
+  const k = e.key
+  if (k === 'Escape') {
+    // 全屏时 Esc 由浏览器先退出全屏
+    if (!document.fullscreenElement) close()
+  } else if (k === 'ArrowLeft') go(-1)
+  else if (k === 'ArrowRight') go(1)
+  else if (k.toLowerCase() === 'f') toggleFav()
+  else if (k.toLowerCase() === 'i') showInfo.value = !showInfo.value
+  else if (!s) return
+  else if (k === '+' || k === '=') s.zoomIn()
+  else if (k === '-' || k === '_') s.zoomOut()
+  else if (k === '0') s.fit()
+  else if (k === '1') s.actual()
+  else if (k.toLowerCase() === 'r') s.rotate(e.shiftKey ? -90 : 90)
+  else if (k.toLowerCase() === 'h') s.flip()
+  else return
+  e.preventDefault()
 }
 
-watch(() => props.index, () => { zoom.value = false })
-onMounted(() => window.addEventListener('keydown', onKey))
-onUnmounted(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+})
 </script>
 
 <style scoped>
 .viewer { position: fixed; inset: 0; z-index: 2000; display: flex; background: rgba(8, 8, 12, .92); backdrop-filter: blur(6px); }
-.stage { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.media { max-width: 100%; max-height: calc(100vh - 48px); object-fit: contain; border-radius: 6px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); cursor: zoom-in; }
-.media.zoom { max-width: none; max-height: none; cursor: zoom-out; }
-.stage:has(.zoom) { overflow: auto; align-items: flex-start; justify-content: flex-start; }
-video.media { cursor: default; }
+.stage { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; padding: 24px 24px 72px; overflow: hidden; }
+.media { max-width: 100%; max-height: calc(100vh - 96px); object-fit: contain; border-radius: 6px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
+.viewer-bar { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: rgba(20, 20, 26, .78); backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(0, 0, 0, .35); max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none; }
+.viewer-bar button { flex-shrink: 0; height: 34px; min-width: 34px; padding: 0 8px; border: none; border-radius: 8px; background: transparent; color: #e8e8ee; cursor: pointer; display: grid; place-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.viewer-bar button:hover { background: rgba(255, 255, 255, .14); }
+.viewer-bar .pct { min-width: 54px; }
+.viewer-bar .sep { flex-shrink: 0; width: 1px; height: 18px; margin: 0 4px; background: rgba(255, 255, 255, .18); }
+.viewer-bar .close-btn { display: none; }
+.no-info .viewer-bar .close-btn, .viewer:fullscreen .viewer-bar .close-btn { display: grid; }
 .audio-box { display: flex; flex-direction: column; align-items: center; gap: 24px; color: #ccc; }
 .audio-box audio { width: min(480px, 80vw); }
 .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(255, 255, 255, .1); color: #fff; cursor: pointer; display: grid; place-items: center; z-index: 2; }
@@ -184,8 +248,15 @@ video.media { cursor: default; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 @media (max-width: 860px) {
   .viewer { flex-direction: column; }
-  .stage { flex: none; height: 55vh; padding: 12px; }
-  .media { max-height: calc(55vh - 24px); }
+  .stage { flex: none; height: 55vh; padding: 12px 12px 60px; }
+  .no-info .stage { flex: 1; height: auto; }
+  .media { max-height: calc(55vh - 72px); }
+  .no-info .media { max-height: calc(100vh - 72px); }
   .info { width: 100%; flex: 1; min-height: 0; border-left: none; }
+  .nav { width: 36px; height: 36px; }
+  .prev { left: 8px; } .next { right: 8px; }
+  .viewer-bar { bottom: 10px; }
+  .viewer-bar button { height: 32px; min-width: 32px; padding: 0 6px; }
+  .viewer-bar .m-hide { display: none; }
 }
 </style>
