@@ -147,6 +147,39 @@ test('图像：批量生成', async () => {
   await page.click('.mode-switch button:has-text("单条")')
 })
 
+test('图片查看器：缩放、平移、旋转与切换', async () => {
+  await page.goto('/gallery')
+  await page.locator('.tile').first().click()
+  const stage = page.locator('.image-stage')
+  const pct = page.locator('.viewer-bar .pct')
+  const img = stage.locator('img')
+  await expect(img).toHaveClass(/ready/)
+  const fitPct = Number((await pct.textContent()).replace('%', ''))
+  // 滚轮以光标为中心放大
+  const box = await stage.boundingBox()
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.4)
+  await page.mouse.wheel(0, -1200)
+  await expect(stage).toHaveClass(/pannable/)
+  await expect.poll(async () => Number((await pct.textContent()).replace('%', ''))).toBeGreaterThan(fitPct)
+  // 拖拽平移
+  const before = await img.evaluate((el) => el.style.transform)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.6, { steps: 5 })
+  await page.mouse.up()
+  expect(await img.evaluate((el) => el.style.transform)).not.toBe(before)
+  // 适应窗口、旋转、键盘
+  await page.keyboard.press('0')
+  await expect(pct).toHaveText(`${fitPct}%`)
+  await page.click('.viewer-bar button[title^="向右旋转"]')
+  await expect.poll(() => img.evaluate((el) => el.style.transform)).toContain('rotate(90deg)')
+  await page.keyboard.press('ArrowRight')
+  await expect(page.locator('.info-head .muted')).toHaveText(/^2 \//)
+  await expect(stage.locator('img')).toHaveClass(/ready/)
+  expect(await stage.locator('img').evaluate((el) => el.style.transform)).toContain('rotate(0deg)')
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.viewer')).toHaveCount(0)
+})
+
 test('切换页面与刷新后保留输入', async () => {
   await page.goto('/image')
   const prompt = page.locator('.prompt-input textarea')
